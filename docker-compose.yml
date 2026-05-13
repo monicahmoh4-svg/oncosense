@@ -1,0 +1,122 @@
+version: "3.9"
+
+services:
+  # ─── Database ───────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: oncosense_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: oncosense
+      POSTGRES_USER: oncosense_user
+      POSTGRES_PASSWORD: oncosense_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oncosense_user -d oncosense"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: oncosense_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── AI Service ─────────────────────────────────────
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: oncosense_ai
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://oncosense_user:oncosense_pass@postgres:5432/oncosense
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=oncosense_ai_secret_key_change_in_production
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./ai-service:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ─── Backend API ─────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: oncosense_backend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_URL=postgresql://oncosense_user:oncosense_pass@postgres:5432/oncosense
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=oncosense_jwt_secret_change_in_production
+      - JWT_EXPIRES_IN=7d
+      - AI_SERVICE_URL=http://ai-service:8000
+      - FRONTEND_URL=http://localhost
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - BCRYPT_ROUNDS=12
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    volumes:
+      - uploads:/app/uploads
+
+  # ─── Frontend ────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=/api
+        - VITE_AI_URL=/ai
+        - VITE_SOCKET_URL=/
+        - VITE_GEMINI_API_KEY=${VITE_GEMINI_API_KEY:-}
+    container_name: oncosense_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+
+  # ─── NGINX Gateway ──────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: oncosense_gateway
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+      - ai-service
+
+volumes:
+  postgres_data:
+  uploads:
