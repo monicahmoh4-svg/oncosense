@@ -110,7 +110,8 @@ export default function AIConsultant () {
         const token  = stored ? JSON.parse(stored)?.state?.token : null
         if (!token) { setAiAvailable(false); return }
 
-        const res = await fetch('/api/ai-chat/status', {
+      const API_BASE = import.meta.env.VITE_API_URL || ''
+        const res = await fetch(`${API_BASE}/ai-chat/status`, {
           headers: { Authorization: `Bearer ${token}` }
         })
         if (res.ok) {
@@ -258,7 +259,8 @@ export default function AIConsultant () {
         const stored = localStorage.getItem('oncosense-auth')
         const token  = stored ? JSON.parse(stored)?.state?.token : null
 
-        const proxyRes = await fetch('/api/ai-chat/chat', {
+     const API_BASE = import.meta.env.VITE_API_URL || ''
+        const proxyRes = await fetch(`${API_BASE}/ai-chat/chat`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
