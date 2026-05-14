@@ -1,7 +1,7 @@
 import axios from 'axios'
 
-// On Railway, VITE_API_URL is set to the backend Railway service public URL
-// e.g. https://oncosense-backend.up.railway.app
+// VITE_API_URL is set in Railway frontend service environment variables
+// to the full backend URL e.g. https://oncosense-backend.up.railway.app
 const API_URL = import.meta.env.VITE_API_URL || ''
 
 const api = axios.create({
@@ -54,11 +54,11 @@ export const profileService = {
 }
 
 export const consultationService = {
-  create:     (data) => api.post('/consultations', data),
-  getAll:     ()     => api.get('/consultations'),
-  getById:    (id)   => api.get(`/consultations/${id}`),
-  complete:   (id, data) => api.patch(`/consultations/${id}/complete`, data),
-  getMessages:(id)   => api.get(`/messages/${id}`),
+  create:      (data) => api.post('/consultations', data),
+  getAll:      ()     => api.get('/consultations'),
+  getById:     (id)   => api.get(`/consultations/${id}`),
+  complete:    (id, data) => api.patch(`/consultations/${id}/complete`, data),
+  getMessages: (id)   => api.get(`/messages/${id}`),
 }
 
 export const clinicService = {
@@ -76,10 +76,10 @@ export const notificationService = {
 }
 
 export const adminService = {
-  getDashboard:    ()       => api.get('/admin/dashboard'),
-  getUsers:        (params) => api.get('/admin/users', { params }),
-  getHighRiskUsers:()       => api.get('/admin/high-risk-users'),
-  getAssessments:  (params) => api.get('/admin/assessments', { params }),
-  getCancerTypes:  ()       => api.get('/admin/analytics/cancer-types'),
-  toggleUser:      (id)     => api.patch(`/admin/users/${id}/toggle`),
+  getDashboard:     ()       => api.get('/admin/dashboard'),
+  getUsers:         (params) => api.get('/admin/users', { params }),
+  getHighRiskUsers: ()       => api.get('/admin/high-risk-users'),
+  getAssessments:   (params) => api.get('/admin/assessments', { params }),
+  getCancerTypes:   ()       => api.get('/admin/analytics/cancer-types'),
+  toggleUser:       (id)     => api.patch(`/admin/users/${id}/toggle`),
 }
