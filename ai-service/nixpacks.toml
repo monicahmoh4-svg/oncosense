@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["python311", "gcc", "libffi"]
+
+[phases.install]
+cmds = ["pip install -r requirements.txt"]
+
+[phases.build]
+cmds = ["python -c \"from app.engines.risk_engine import train_and_save_model; train_and_save_model()\""]
+
+[start]
+cmd = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
