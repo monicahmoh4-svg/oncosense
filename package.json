@@ -1,10 +1,11 @@
 {
   "name": "oncosense-backend",
   "version": "1.0.0",
+  "description": "OncoSense Backend",
   "engines": { "node": ">=20.0.0" },
   "scripts": {
     "start": "node backend/src/server.js",
-    "build": "cd backend && npm ci --only=production"
+    "build": "npm install --prefix backend --only=production"
   },
   "dependencies": {
     "express": "^4.18.2",
