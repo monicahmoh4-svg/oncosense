@@ -7,12 +7,12 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: process.env.VITE_API_URL || 'http://localhost:3001',
+        target: 'http://localhost:3001',
         changeOrigin: true,
         rewrite: p => p.replace(/^\/api/, '')
       },
       '/socket.io': {
-        target: process.env.VITE_API_URL || 'http://localhost:3001',
+        target: 'http://localhost:3001',
         ws: true,
         changeOrigin: true
       }
@@ -30,5 +30,8 @@ export default defineConfig({
         }
       }
     }
+  },
+  define: {
+    __APP_VERSION__: JSON.stringify('1.0.0')
   }
 })
