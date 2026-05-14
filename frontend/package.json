@@ -2,10 +2,14 @@
   "name": "oncosense-frontend",
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "npx serve -s dist -l ${PORT:-3000}"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -23,6 +27,7 @@
     "react-i18next": "^13.5.0",
     "react-hot-toast": "^2.4.1",
     "date-fns": "^3.0.6",
+    "serve": "^14.2.1",
     "@radix-ui/react-dialog": "^1.0.5",
     "@radix-ui/react-select": "^2.0.0",
     "@radix-ui/react-progress": "^1.0.3",
