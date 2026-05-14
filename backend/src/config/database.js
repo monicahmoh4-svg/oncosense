@@ -5,24 +5,33 @@ let pool;
 
 const getPool = () => {
   if (!pool) {
-    pool = new Pool({
+    const config = {
       connectionString: process.env.DATABASE_URL,
-      max: 20,
+      max: 10,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000,
-      ssl: process.env.NODE_ENV === "production" && process.env.DATABASE_SSL === "true"
-        ? { rejectUnauthorized: false }
-        : false
-    });
+      connectionTimeoutMillis: 10000,
+    };
+
+    // Railway PostgreSQL always needs SSL with self-signed cert
+    if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes("railway")) {
+      config.ssl = { rejectUnauthorized: false };
+    } else if (process.env.NODE_ENV === "production") {
+      config.ssl = { rejectUnauthorized: false };
+    }
+
+    pool = new Pool(config);
 
     pool.on("error", (err) => {
-      logger.error("PostgreSQL pool error:", err);
+      logger.error("PostgreSQL pool error:", err.message);
     });
   }
   return pool;
 };
 
 const connectDB = async () => {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("DATABASE_URL environment variable is not set");
+  }
   const client = await getPool().connect();
   try {
     await client.query("SELECT 1");
@@ -33,24 +42,25 @@ const connectDB = async () => {
 };
 
 const query = async (text, params) => {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("Database not configured");
+  }
   const start = Date.now();
-  const pool = getPool();
   try {
-    const result = await pool.query(text, params);
+    const result = await getPool().query(text, params);
     const duration = Date.now() - start;
     if (duration > 500) {
-      logger.warn(`Slow query (${duration}ms): ${text.substring(0, 100)}`);
+      logger.warn(`Slow query (${duration}ms): ${text.substring(0, 80)}`);
     }
     return result;
   } catch (error) {
-    logger.error("Query error:", { text: text.substring(0, 100), error: error.message });
+    logger.error("Query error:", { text: text.substring(0, 80), error: error.message });
     throw error;
   }
 };
 
 const transaction = async (callback) => {
-  const pool = getPool();
-  const client = await pool.connect();
+  const client = await getPool().connect();
   try {
     await client.query("BEGIN");
     const result = await callback(client);
