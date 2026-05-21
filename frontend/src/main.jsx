@@ -112,7 +112,7 @@ if (!i18n.isInitialized) {
           logout: 'Déconnexion',
           heroTitle: 'Détection précoce du cancer',
           heroSubtitle: 'Pour tous',
-          heroDesc: "Dépistage du risque de cancer par IA pour les communautés mal desservies.",
+          heroDesc: 'Dépistage du risque de cancer par IA pour les communautés mal desservies.',
           startAssessment: "Commencer l'évaluation gratuite",
           learnMore: 'En savoir plus',
           login: 'Connexion',
