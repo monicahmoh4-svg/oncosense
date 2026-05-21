@@ -4,16 +4,19 @@ const { body, validationResult } = require("express-validator");
 const authController = require("../controllers/authController");
 const { authenticate } = require("../middleware/auth");
 
-// Validation rules
 const registerValidation = [
   body("first_name").trim().notEmpty().withMessage("First name required"),
   body("last_name").trim().notEmpty().withMessage("Last name required"),
-  body("email").optional().isEmail().normalizeEmail(),
-  body("phone").optional().isMobilePhone(),
+  body("email")
+    .optional({ nullable: true, checkFalsy: true })
+    .isEmail().withMessage("Invalid email address")
+    .normalizeEmail(),
+  body("phone")
+    .optional({ nullable: true, checkFalsy: true })
+    .isString()
+    .withMessage("Invalid phone number"),
   body("password")
-    .isLength({ min: 8 }).withMessage("Password must be at least 8 characters")
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-    .withMessage("Password must contain uppercase, lowercase and number"),
+    .isLength({ min: 6 }).withMessage("Password must be at least 6 characters"),
   body("role")
     .optional()
     .isIn(["patient", "health_worker"])
@@ -25,19 +28,17 @@ const loginValidation = [
   body("password").notEmpty().withMessage("Password required"),
 ];
 
-// Middleware to check validation result
 const validate = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({
-      error: "Validation failed",
+      error: errors.array()[0].msg,
       details: errors.array()
     });
   }
   next();
 };
 
-// ── Routes
 router.post("/register", registerValidation, validate, authController.register);
 router.post("/login", loginValidation, validate, authController.login);
 router.post("/logout", authenticate, authController.logout);
