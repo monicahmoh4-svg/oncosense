@@ -1,35 +1,46 @@
-const fs   = require("fs");
-const path = require("path");
+#!/usr/bin/env node
+const fs   = require('fs')
+const path = require('path')
 
-// Repo root is one level above /scripts/
-const src  = path.resolve(__dirname, "..", "frontend", "dist");
-const dest = path.resolve(__dirname, "..", "backend", "public");
+const ROOT = path.resolve(__dirname, '..')
+const src  = path.join(ROOT, 'frontend', 'dist')
+const dest = path.join(ROOT, 'backend', 'public')
 
-function copyDir(from, to) {
-  fs.mkdirSync(to, { recursive: true });
+console.log('=== copy-frontend ===')
+console.log('ROOT :', ROOT)
+console.log('src  :', src)
+console.log('dest :', dest)
+console.log('src exists:', fs.existsSync(src))
+
+if (!fs.existsSync(src)) {
+  console.error('ERROR: frontend/dist not found at', src)
+  process.exit(1)
+}
+
+function copyDir (from, to) {
+  fs.mkdirSync(to, { recursive: true })
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
-    const srcPath  = path.join(from, entry.name);
-    const destPath = path.join(to, entry.name);
-    if (entry.isDirectory()) {
-      copyDir(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
+    const s = path.join(from, entry.name)
+    const d = path.join(to, entry.name)
+    if (entry.isDirectory()) copyDir(s, d)
+    else fs.copyFileSync(s, d)
   }
 }
 
-if (!fs.existsSync(src)) {
-  console.error("❌  frontend/dist not found at:", src);
-  console.error("    Did `npm run build --prefix frontend` succeed?");
-  process.exit(1);
-}
-
 if (fs.existsSync(dest)) {
-  fs.rmSync(dest, { recursive: true, force: true });
+  fs.rmSync(dest, { recursive: true, force: true })
+  console.log('Cleaned old backend/public')
 }
 
-copyDir(src, dest);
+copyDir(src, dest)
 
-const count = fs.readdirSync(dest).length;
-console.log(`✅  Copied frontend/dist → backend/public  (${count} top-level entries)`);
-console.log(`    index.html present: ${fs.existsSync(path.join(dest, "index.html"))}`);
+const indexExists = fs.existsSync(path.join(dest, 'index.html'))
+const count       = fs.readdirSync(dest).length
+console.log(`Copied ${count} top-level entries to backend/public`)
+console.log('index.html present:', indexExists)
+
+if (!indexExists) {
+  console.error('ERROR: index.html missing after copy')
+  process.exit(1)
+}
+console.log('✅ Frontend ready at backend/public/index.html')
