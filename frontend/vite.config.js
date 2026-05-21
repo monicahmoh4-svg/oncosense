@@ -21,17 +21,6 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'react-router-dom'],
-          charts: ['recharts'],
-          motion: ['framer-motion']
-        }
-      }
-    }
-  },
-  define: {
-    __APP_VERSION__: JSON.stringify('1.0.0')
+    chunkSizeWarningLimit: 1000
   }
 })
