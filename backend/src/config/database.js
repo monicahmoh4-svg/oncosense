@@ -10,19 +10,16 @@ const getPool = () => {
     if (!process.env.DATABASE_URL) {
       throw new Error("DATABASE_URL is not set");
     }
-
     const config = {
       connectionString: process.env.DATABASE_URL,
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 15000,
     };
-
-    // Always enable SSL in production — works for Render, Railway, Supabase, etc.
+    // Enable SSL for all production hosts (Render, Railway, Supabase, etc.)
     if (process.env.NODE_ENV === "production") {
       config.ssl = { rejectUnauthorized: false };
     }
-
     pool = new Pool(config);
     pool.on("error", (err) => logger.error("PG pool error:", err.message));
   }
@@ -41,8 +38,7 @@ const connectDB = async () => {
 
 const query = async (text, params) => {
   try {
-    const result = await getPool().query(text, params);
-    return result;
+    return await getPool().query(text, params);
   } catch (err) {
     logger.error("Query error:", { sql: text.substring(0, 100), error: err.message, code: err.code });
     throw err;
@@ -64,46 +60,23 @@ const transaction = async (callback) => {
   }
 };
 
-// Execute each SQL statement individually so one failure doesn't abort everything
-const execStatement = async (stmt) => {
-  const s = stmt.trim();
-  if (!s || s.startsWith("--")) return;
-  try {
-    await getPool().query(s);
-  } catch (err) {
-    const ignorable = [
-      "already exists",
-      "duplicate",
-      "42710", // duplicate_object
-      "42P07", // duplicate_table
-      "42701", // duplicate_column
-      "42P06", // duplicate_schema
-    ];
-    const isIgnorable = ignorable.some(i =>
-      err.message.toLowerCase().includes(i) || err.code === i
-    );
-    if (!isIgnorable) {
-      logger.warn(`SQL warning [${err.code}]: ${err.message} — stmt: ${s.substring(0, 80)}`);
-    }
-  }
-};
-
 const runMigrations = async () => {
   // __dirname = backend/src/config
-  // repo root = three levels up
+  // On Render: /opt/render/project/src/backend/src/config
+  // repo root  = 3 levels up
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const migDir   = path.join(repoRoot, "db", "migrations");
   const seedDir  = path.join(repoRoot, "db", "seeds");
 
-  logger.info(`Repo root: ${repoRoot}`);
-  logger.info(`Migrations dir: ${migDir} — exists: ${fs.existsSync(migDir)}`);
+  logger.info(`repoRoot: ${repoRoot}`);
+  logger.info(`migDir: ${migDir} — exists: ${fs.existsSync(migDir)}`);
 
   if (!fs.existsSync(migDir)) {
-    logger.warn("Migrations dir not found — skipping");
+    logger.warn("Migrations directory not found — skipping");
     return;
   }
 
-  // Create tracking table first
+  // Create migration tracking table
   await getPool().query(`
     CREATE TABLE IF NOT EXISTS _migrations (
       filename VARCHAR(255) PRIMARY KEY,
@@ -111,41 +84,59 @@ const runMigrations = async () => {
     )
   `).catch(e => logger.warn("_migrations table:", e.message));
 
-  const applied = await getPool().query("SELECT filename FROM _migrations").catch(() => ({ rows: [] }));
-  const done = new Set(applied.rows.map(r => r.filename));
+  const { rows: appliedRows } = await getPool()
+    .query("SELECT filename FROM _migrations")
+    .catch(() => ({ rows: [] }));
+  const done = new Set(appliedRows.map(r => r.filename));
 
-  const migFiles = fs.existsSync(migDir)
-    ? fs.readdirSync(migDir).filter(f => f.endsWith(".sql")).sort()
-    : [];
+  // Run migration files
+  const migFiles = fs.readdirSync(migDir).filter(f => f.endsWith(".sql")).sort();
 
   for (const file of migFiles) {
-    if (done.has(file)) { logger.info(`Already applied: ${file}`); continue; }
-    logger.info(`Applying migration: ${file}`);
+    if (done.has(file)) {
+      logger.info(`Already applied: ${file}`);
+      continue;
+    }
+    logger.info(`Applying: ${file}`);
     const sql = fs.readFileSync(path.join(migDir, file), "utf8");
-    // Split on semicolons and run each statement individually
-    const statements = sql.split(";").map(s => s.trim()).filter(s => s.length > 3);
-    for (const stmt of statements) await execStatement(stmt);
-    await getPool().query(
-      "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]
-    ).catch(() => {});
-    logger.info(`✅ Migration done: ${file}`);
+    try {
+      await getPool().query(sql);
+      await getPool().query(
+        "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
+        [file]
+      );
+      logger.info(`✅ Done: ${file}`);
+    } catch (err) {
+      logger.error(`Migration failed: ${file} — ${err.message}`);
+    }
   }
 
-  const seedFiles = fs.existsSync(seedDir)
-    ? fs.readdirSync(seedDir).filter(f => f.endsWith(".sql")).sort()
-    : [];
-
-  for (const file of seedFiles) {
-    const key = `seed:${file}`;
-    if (done.has(key)) { logger.info(`Seed already applied: ${file}`); continue; }
-    logger.info(`Applying seed: ${file}`);
-    const sql = fs.readFileSync(path.join(seedDir, file), "utf8");
-    const statements = sql.split(";").map(s => s.trim()).filter(s => s.length > 3);
-    for (const stmt of statements) await execStatement(stmt);
-    await getPool().query(
-      "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]
-    ).catch(() => {});
-    logger.info(`✅ Seed done: ${file}`);
+  // Run seed files
+  if (fs.existsSync(seedDir)) {
+    const seedFiles = fs.readdirSync(seedDir).filter(f => f.endsWith(".sql")).sort();
+    for (const file of seedFiles) {
+      const key = `seed:${file}`;
+      if (done.has(key)) {
+        logger.info(`Seed already applied: ${file}`);
+        continue;
+      }
+      logger.info(`Seeding: ${file}`);
+      const sql = fs.readFileSync(path.join(seedDir, file), "utf8");
+      try {
+        await getPool().query(sql);
+        await getPool().query(
+          "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
+          [key]
+        );
+        logger.info(`✅ Seed done: ${file}`);
+      } catch (err) {
+        logger.warn(`Seed warning: ${file} — ${err.message}`);
+        await getPool().query(
+          "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
+          [key]
+        ).catch(() => {});
+      }
+    }
   }
 
   logger.info("✅ All migrations complete");
