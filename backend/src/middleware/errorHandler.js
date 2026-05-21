@@ -1,10 +1,9 @@
-// ── errorHandler.js
 const logger = require("../utils/logger");
 
 exports.errorHandler = (err, req, res, next) => {
   logger.error({
     message: err.message,
-    stack: err.stack,
+    code: err.code,
     url: req.url,
     method: req.method,
     user: req.user?.id
@@ -12,12 +11,22 @@ exports.errorHandler = (err, req, res, next) => {
 
   // PostgreSQL unique violation
   if (err.code === "23505") {
-    return res.status(409).json({ error: "Resource already exists" });
+    return res.status(409).json({ error: "Account already exists" });
   }
 
   // PostgreSQL foreign key violation
   if (err.code === "23503") {
     return res.status(400).json({ error: "Invalid reference" });
+  }
+
+  // PostgreSQL undefined table (migrations not run yet)
+  if (err.code === "42P01") {
+    return res.status(503).json({ error: "Database not ready. Please try again in a moment." });
+  }
+
+  // PostgreSQL connection error
+  if (err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
+    return res.status(503).json({ error: "Database connection failed. Please try again." });
   }
 
   const status = err.status || err.statusCode || 500;
