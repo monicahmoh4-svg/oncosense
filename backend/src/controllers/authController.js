@@ -6,7 +6,7 @@ const logger = require("../utils/logger");
 
 const JWT_SECRET = process.env.JWT_SECRET || "oncosense_jwt_secret_dev";
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
-const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS) || 12;
+const BCRYPT_ROUNDS = parseInt(process.env.BCRYPT_ROUNDS) || 10;
 
 const generateToken = (user) => {
   return jwt.sign(
@@ -18,37 +18,45 @@ const generateToken = (user) => {
 
 exports.register = async (req, res, next) => {
   try {
-    const { first_name, last_name, email, phone, password, role = "patient", preferred_language = "en" } = req.body;
+    const {
+      first_name, last_name, email, phone,
+      password, role = "patient", preferred_language = "en"
+    } = req.body;
 
-    // Must have email or phone
-    if (!email && !phone) {
+    const cleanEmail = email && email.trim() !== "" ? email.trim().toLowerCase() : null;
+    const cleanPhone = phone && phone.trim() !== "" ? phone.trim() : null;
+
+    if (!cleanEmail && !cleanPhone) {
       return res.status(400).json({ error: "Email or phone number required" });
     }
 
-    // Check for existing user
-    if (email) {
-      const existing = await query("SELECT id FROM users WHERE email = $1", [email]);
+    // Check duplicates
+    if (cleanEmail) {
+      const existing = await query(
+        "SELECT id FROM users WHERE email = $1", [cleanEmail]
+      );
       if (existing.rows.length > 0) {
         return res.status(409).json({ error: "Email already registered" });
       }
     }
 
-    if (phone) {
-      const existing = await query("SELECT id FROM users WHERE phone = $1", [phone]);
+    if (cleanPhone) {
+      const existing = await query(
+        "SELECT id FROM users WHERE phone = $1", [cleanPhone]
+      );
       if (existing.rows.length > 0) {
-        return res.status(409).json({ error: "Phone already registered" });
+        return res.status(409).json({ error: "Phone number already registered" });
       }
     }
 
-    // Hash password
     const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
 
-    // Create user
     const result = await query(
-      `INSERT INTO users (id, email, phone, password_hash, role, first_name, last_name, preferred_language, is_active, is_verified)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, false)
+      `INSERT INTO users
+         (id, email, phone, password_hash, role, first_name, last_name, preferred_language, is_active, is_verified)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,false)
        RETURNING id, email, phone, role, first_name, last_name, preferred_language, created_at`,
-      [uuidv4(), email || null, phone || null, password_hash, role, first_name, last_name, preferred_language]
+      [uuidv4(), cleanEmail, cleanPhone, password_hash, role, first_name.trim(), last_name.trim(), preferred_language]
     );
 
     const user = result.rows[0];
@@ -56,7 +64,7 @@ exports.register = async (req, res, next) => {
 
     logger.info(`New user registered: ${user.id} (${role})`);
 
-    res.status(201).json({
+    return res.status(201).json({
       message: "Account created successfully",
       user: {
         id: user.id,
@@ -70,6 +78,13 @@ exports.register = async (req, res, next) => {
       token
     });
   } catch (error) {
+    logger.error("Register error:", error.message);
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "Account already exists with that email or phone" });
+    }
+    if (error.message && error.message.includes("relation") && error.message.includes("does not exist")) {
+      return res.status(503).json({ error: "Database not ready yet. Please try again in a moment." });
+    }
     next(error);
   }
 };
@@ -78,35 +93,46 @@ exports.login = async (req, res, next) => {
   try {
     const { identifier, password } = req.body;
 
-    // Find user by email or phone
-    const result = await query(
-      `SELECT id, email, phone, password_hash, role, first_name, last_name, 
+    const cleanIdentifier = identifier.trim();
+
+    // Search by email OR phone separately to avoid type errors
+    let result = await query(
+      `SELECT id, email, phone, password_hash, role, first_name, last_name,
               preferred_language, is_active, is_verified
        FROM users
-       WHERE (email = $1 OR phone = $1) AND is_active = true`,
-      [identifier]
+       WHERE email = $1 AND is_active = true`,
+      [cleanIdentifier.toLowerCase()]
     );
 
+    // If not found by email, try phone
     if (result.rows.length === 0) {
-      return res.status(401).json({ error: "Invalid credentials" });
+      result = await query(
+        `SELECT id, email, phone, password_hash, role, first_name, last_name,
+                preferred_language, is_active, is_verified
+         FROM users
+         WHERE phone = $1 AND is_active = true`,
+        [cleanIdentifier]
+      );
+    }
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Invalid email/phone or password" });
     }
 
     const user = result.rows[0];
 
-    // Verify password
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) {
-      return res.status(401).json({ error: "Invalid credentials" });
+      return res.status(401).json({ error: "Invalid email/phone or password" });
     }
 
-    // Update last login
     await query("UPDATE users SET last_login = NOW() WHERE id = $1", [user.id]);
 
     const token = generateToken(user);
 
     logger.info(`User logged in: ${user.id} (${user.role})`);
 
-    res.json({
+    return res.json({
       message: "Login successful",
       user: {
         id: user.id,
@@ -120,13 +146,15 @@ exports.login = async (req, res, next) => {
       token
     });
   } catch (error) {
+    logger.error("Login error:", error.message);
+    if (error.message && error.message.includes("relation") && error.message.includes("does not exist")) {
+      return res.status(503).json({ error: "Database not ready yet. Please try again in a moment." });
+    }
     next(error);
   }
 };
 
 exports.logout = async (req, res) => {
-  // JWT is stateless; client should delete token
-  // For enhanced security, add token to Redis blacklist
   res.json({ message: "Logged out successfully" });
 };
 
@@ -158,7 +186,7 @@ exports.refreshToken = async (req, res, next) => {
 exports.getMe = async (req, res, next) => {
   try {
     const result = await query(
-      `SELECT u.id, u.email, u.phone, u.role, u.first_name, u.last_name, 
+      `SELECT u.id, u.email, u.phone, u.role, u.first_name, u.last_name,
               u.preferred_language, u.is_verified, u.last_login, u.created_at,
               hp.profile_completed
        FROM users u
@@ -186,13 +214,20 @@ exports.changePassword = async (req, res, next) => {
       [req.user.id]
     );
 
+    if (!result.rows.length) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
     const valid = await bcrypt.compare(current_password, result.rows[0].password_hash);
     if (!valid) {
       return res.status(400).json({ error: "Current password incorrect" });
     }
 
     const hash = await bcrypt.hash(new_password, BCRYPT_ROUNDS);
-    await query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [hash, req.user.id]);
+    await query(
+      "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+      [hash, req.user.id]
+    );
 
     res.json({ message: "Password updated successfully" });
   } catch (error) {
@@ -201,6 +236,5 @@ exports.changePassword = async (req, res, next) => {
 };
 
 exports.forgotPassword = async (req, res) => {
-  // Placeholder — would send SMS/email with reset code
   res.json({ message: "If the account exists, a reset link has been sent." });
 };
