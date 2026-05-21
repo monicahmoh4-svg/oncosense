@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: oncosense
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 20.0.0
+      - key: JWT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+
+databases:
+  - name: oncosense-db
+    databaseName: oncosense
+    user: oncosense_user
+    plan: free
