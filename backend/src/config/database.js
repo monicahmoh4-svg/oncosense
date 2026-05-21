@@ -18,8 +18,7 @@ const getPool = () => {
       connectionTimeoutMillis: 15000,
     };
 
-    // Enable SSL for all production environments (Render, Railway, etc.)
-    // Render PostgreSQL requires SSL — rejectUnauthorized:false for self-signed certs
+    // Always enable SSL in production — works for Render, Railway, Supabase, etc.
     if (process.env.NODE_ENV === "production") {
       config.ssl = { rejectUnauthorized: false };
     }
@@ -34,21 +33,18 @@ const connectDB = async () => {
   const client = await getPool().connect();
   try {
     await client.query("SELECT 1");
-    logger.info("Database ping successful");
+    logger.info("Database ping OK");
   } finally {
     client.release();
   }
 };
 
 const query = async (text, params) => {
-  const start = Date.now();
   try {
     const result = await getPool().query(text, params);
-    const ms = Date.now() - start;
-    if (ms > 500) logger.warn(`Slow query (${ms}ms): ${text.substring(0, 80)}`);
     return result;
   } catch (err) {
-    logger.error("Query error:", { sql: text.substring(0, 80), error: err.message, code: err.code });
+    logger.error("Query error:", { sql: text.substring(0, 100), error: err.message, code: err.code });
     throw err;
   }
 };
@@ -68,115 +64,88 @@ const transaction = async (callback) => {
   }
 };
 
-// Split SQL into individual statements and run each one separately
-// This prevents one failing statement from aborting the whole migration
-const runSqlStatements = async (sql) => {
-  // Split on semicolons but ignore those inside strings/functions
-  const statements = sql
-    .split(/;[\s]*(?=(?:[^']*'[^']*')*[^']*$)/gm)
-    .map(s => s.trim())
-    .filter(s => s.length > 0 && !s.startsWith("--"));
-
-  for (const stmt of statements) {
-    try {
-      await getPool().query(stmt);
-    } catch (err) {
-      // Skip "already exists" errors — makes migrations idempotent
-      if (
-        err.message.includes("already exists") ||
-        err.code === "42710" ||  // duplicate_object
-        err.code === "42P07" ||  // duplicate_table
-        err.code === "42701"     // duplicate_column
-      ) {
-        // Expected — skip silently
-      } else {
-        logger.warn(`SQL statement warning: ${err.message} | stmt: ${stmt.substring(0, 60)}`);
-      }
+// Execute each SQL statement individually so one failure doesn't abort everything
+const execStatement = async (stmt) => {
+  const s = stmt.trim();
+  if (!s || s.startsWith("--")) return;
+  try {
+    await getPool().query(s);
+  } catch (err) {
+    const ignorable = [
+      "already exists",
+      "duplicate",
+      "42710", // duplicate_object
+      "42P07", // duplicate_table
+      "42701", // duplicate_column
+      "42P06", // duplicate_schema
+    ];
+    const isIgnorable = ignorable.some(i =>
+      err.message.toLowerCase().includes(i) || err.code === i
+    );
+    if (!isIgnorable) {
+      logger.warn(`SQL warning [${err.code}]: ${err.message} — stmt: ${s.substring(0, 80)}`);
     }
   }
 };
 
 const runMigrations = async () => {
-  // Resolve path from repo root regardless of where Node is invoked from
-  // On Render: /opt/render/project/src/db/migrations
-  // __dirname = /opt/render/project/src/backend/src/config
+  // __dirname = backend/src/config
+  // repo root = three levels up
   const repoRoot = path.resolve(__dirname, "..", "..", "..");
   const migDir   = path.join(repoRoot, "db", "migrations");
   const seedDir  = path.join(repoRoot, "db", "seeds");
 
-  logger.info(`Migrations dir: ${migDir}`);
-  logger.info(`Migrations dir exists: ${fs.existsSync(migDir)}`);
+  logger.info(`Repo root: ${repoRoot}`);
+  logger.info(`Migrations dir: ${migDir} — exists: ${fs.existsSync(migDir)}`);
 
   if (!fs.existsSync(migDir)) {
-    logger.warn("Migrations directory not found — skipping auto-migration");
+    logger.warn("Migrations dir not found — skipping");
     return;
   }
 
-  // Create tracking table
-  try {
-    await getPool().query(`
-      CREATE TABLE IF NOT EXISTS _migrations (
-        filename VARCHAR(255) PRIMARY KEY,
-        applied_at TIMESTAMP DEFAULT NOW()
-      )
-    `);
-  } catch (err) {
-    logger.warn("Could not create _migrations table:", err.message);
-    return;
-  }
+  // Create tracking table first
+  await getPool().query(`
+    CREATE TABLE IF NOT EXISTS _migrations (
+      filename VARCHAR(255) PRIMARY KEY,
+      applied_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(e => logger.warn("_migrations table:", e.message));
 
-  const applied = await getPool().query("SELECT filename FROM _migrations");
+  const applied = await getPool().query("SELECT filename FROM _migrations").catch(() => ({ rows: [] }));
   const done = new Set(applied.rows.map(r => r.filename));
 
-  // Run migration files
-  const migFiles = fs.readdirSync(migDir)
-    .filter(f => f.endsWith(".sql"))
-    .sort();
+  const migFiles = fs.existsSync(migDir)
+    ? fs.readdirSync(migDir).filter(f => f.endsWith(".sql")).sort()
+    : [];
 
   for (const file of migFiles) {
-    if (done.has(file)) {
-      logger.info(`Migration already applied: ${file}`);
-      continue;
-    }
-    try {
-      logger.info(`Applying migration: ${file}`);
-      const sql = fs.readFileSync(path.join(migDir, file), "utf8");
-      await runSqlStatements(sql);
-      await getPool().query(
-        "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
-        [file]
-      );
-      logger.info(`✅ Migration applied: ${file}`);
-    } catch (err) {
-      logger.error(`Migration failed: ${file} — ${err.message}`);
-    }
+    if (done.has(file)) { logger.info(`Already applied: ${file}`); continue; }
+    logger.info(`Applying migration: ${file}`);
+    const sql = fs.readFileSync(path.join(migDir, file), "utf8");
+    // Split on semicolons and run each statement individually
+    const statements = sql.split(";").map(s => s.trim()).filter(s => s.length > 3);
+    for (const stmt of statements) await execStatement(stmt);
+    await getPool().query(
+      "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]
+    ).catch(() => {});
+    logger.info(`✅ Migration done: ${file}`);
   }
 
-  // Run seed files
-  if (fs.existsSync(seedDir)) {
-    const seedFiles = fs.readdirSync(seedDir)
-      .filter(f => f.endsWith(".sql"))
-      .sort();
+  const seedFiles = fs.existsSync(seedDir)
+    ? fs.readdirSync(seedDir).filter(f => f.endsWith(".sql")).sort()
+    : [];
 
-    for (const file of seedFiles) {
-      const key = `seed:${file}`;
-      if (done.has(key)) {
-        logger.info(`Seed already applied: ${file}`);
-        continue;
-      }
-      try {
-        logger.info(`Applying seed: ${file}`);
-        const sql = fs.readFileSync(path.join(seedDir, file), "utf8");
-        await runSqlStatements(sql);
-        await getPool().query(
-          "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
-          [key]
-        );
-        logger.info(`✅ Seed applied: ${file}`);
-      } catch (err) {
-        logger.warn(`Seed warning: ${file} — ${err.message}`);
-      }
-    }
+  for (const file of seedFiles) {
+    const key = `seed:${file}`;
+    if (done.has(key)) { logger.info(`Seed already applied: ${file}`); continue; }
+    logger.info(`Applying seed: ${file}`);
+    const sql = fs.readFileSync(path.join(seedDir, file), "utf8");
+    const statements = sql.split(";").map(s => s.trim()).filter(s => s.length > 3);
+    for (const stmt of statements) await execStatement(stmt);
+    await getPool().query(
+      "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]
+    ).catch(() => {});
+    logger.info(`✅ Seed done: ${file}`);
   }
 
   logger.info("✅ All migrations complete");
