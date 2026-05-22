@@ -6,7 +6,6 @@ const morgan      = require("morgan");
 const compression = require("compression");
 const rateLimit   = require("express-rate-limit");
 const path        = require("path");
-const fs          = require("fs");
 
 const authRoutes           = require("./routes/auth");
 const userRoutes           = require("./routes/users");
@@ -52,7 +51,7 @@ const authLimit = rateLimit({
   standardHeaders: true, legacyHeaders: false
 });
 
-// ── Health check — always responds instantly, no DB required
+// Health check
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "healthy",
@@ -62,14 +61,12 @@ app.get("/health", (req, res) => {
   });
 });
 
-// ── Uploaded files
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
-// ── Rate limiting on API
-app.use("/api", apiLimit);
+app.use("/api",      apiLimit);
 app.use("/api/auth", authLimit);
 
-// ── All API routes — strictly under /api/* prefix
+// All API routes
 app.use("/api/auth",            authRoutes);
 app.use("/api/users",           userRoutes);
 app.use("/api/profiles",        profileRoutes);
@@ -83,49 +80,11 @@ app.use("/api/notifications",   notificationRoutes);
 app.use("/api/admin",           adminAPIRoutes);
 app.use("/api/ai-chat",         aiChatRoutes);
 
-// ── Legacy unprefixed paths kept for Socket.IO auth compatibility only
-app.use("/auth",            authRoutes);
-app.use("/ai-chat",         aiChatRoutes);
+// Legacy unprefixed paths for Socket.IO
+app.use("/auth",    authRoutes);
+app.use("/ai-chat", aiChatRoutes);
 
-// ── API error handler (only for /api routes)
 app.use("/api", errorHandler);
-
-// ── Serve the built React SPA
-// backend/public is populated by scripts/copy-frontend.js during the build phase
-const publicDir = path.resolve(__dirname, "..", "public");
-const indexHtml = path.join(publicDir, "index.html");
-
-logger.info(`Serving frontend from: ${publicDir}`);
-logger.info(`index.html exists: ${fs.existsSync(indexHtml)}`);
-
-// Serve static assets (JS/CSS/images) with long-term caching
-app.use(express.static(publicDir, {
-  maxAge: "1y",
-  etag: true,
-  index: false  // do NOT auto-serve index.html — we handle that below
-}));
-
-// SPA fallback — every non-API, non-asset request serves index.html
-// This is what makes /dashboard, /admin, /login, /register all work
-app.get("*", (req, res) => {
-  if (fs.existsSync(indexHtml)) {
-    res.sendFile(indexHtml);
-  } else {
-    // Frontend not built yet — show a clear error instead of JSON
-    res.status(200).send(`<!DOCTYPE html>
-<html>
-  <head><title>OncoSense</title></head>
-  <body style="font-family:sans-serif;padding:48px;background:#f0fdf8;color:#0d4d3c">
-    <h1>🏥 OncoSense</h1>
-    <p>Frontend build not found. The build step may have failed.</p>
-    <p>Expected location: <code>${indexHtml}</code></p>
-    <p>API is healthy: <a href="/health">/health</a></p>
-  </body>
-</html>`);
-  }
-});
-
-// ── Global error handler
 app.use(errorHandler);
 
 module.exports = app;
