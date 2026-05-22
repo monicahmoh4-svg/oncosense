@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "buildCommand": "npm run build",
+  "outputDirectory": "frontend/dist",
+  "installCommand": "npm install --prefix backend && NODE_ENV=development npm install --prefix frontend",
+  "framework": null,
+  "functions": {
+    "api/index.js": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index.js" },
+    { "source": "/health",   "destination": "/api/index.js" },
+    { "source": "/socket.io/(.*)", "destination": "/api/index.js" },
+    { "source": "/(.*)",     "destination": "/index.html" }
+  ]
+}
