@@ -8,50 +8,33 @@ const logger                       = require("./utils/logger");
 const PORT = process.env.PORT || 3001;
 
 async function start() {
-  // Start HTTP server FIRST — health check must respond immediately
   const server = http.createServer(app);
   initSocket(server);
 
   await new Promise((resolve) => {
     server.listen(PORT, "0.0.0.0", () => {
-      logger.info(`✅ OncoSense listening on port ${PORT}`);
-      logger.info(`   NODE_ENV: ${process.env.NODE_ENV}`);
+      logger.info(`✅ OncoSense on port ${PORT} | NODE_ENV=${process.env.NODE_ENV}`);
       logger.info(`   DATABASE_URL set: ${!!process.env.DATABASE_URL}`);
       resolve();
     });
   });
 
-  // Connect to DB with retries — Render DB can take a few seconds
-  let connected = false;
-  for (let attempt = 1; attempt <= 10; attempt++) {
+  for (let i = 1; i <= 10; i++) {
     try {
       await connectDB();
       logger.info("✅ Database connected");
-      connected = true;
+      await runMigrations();
       break;
     } catch (err) {
-      logger.warn(`DB attempt ${attempt}/10 failed: ${err.message}`);
-      if (attempt < 10) await new Promise(r => setTimeout(r, 5000));
+      logger.warn(`DB attempt ${i}/10: ${err.message}`);
+      if (i < 10) await new Promise(r => setTimeout(r, 5000));
+      else logger.error("DB unavailable — degraded mode");
     }
   }
 
-  if (connected) {
-    try {
-      await runMigrations();
-    } catch (err) {
-      logger.error("Migration error:", err.message);
-    }
-  } else {
-    logger.error("Could not connect to DB after 10 attempts — running in degraded mode");
-  }
-
-  process.on("SIGTERM", () => {
-    logger.info("SIGTERM — shutting down");
-    server.close(() => process.exit(0));
-  });
+  process.on("SIGTERM", () => server.close(() => process.exit(0)));
 }
 
 start().catch(err => {
-  logger.error("Fatal startup error:", err.message);
-  // Do NOT exit — HTTP server is already listening
+  logger.error("Fatal:", err.message);
 });
