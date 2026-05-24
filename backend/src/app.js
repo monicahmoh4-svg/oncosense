@@ -6,6 +6,7 @@ const morgan      = require("morgan");
 const compression = require("compression");
 const rateLimit   = require("express-rate-limit");
 const path        = require("path");
+const fs          = require("fs");
 
 const authRoutes           = require("./routes/auth");
 const userRoutes           = require("./routes/users");
@@ -51,13 +52,10 @@ const authLimit = rateLimit({
   standardHeaders: true, legacyHeaders: false
 });
 
-// Health check
 app.get("/health", (req, res) => {
   res.status(200).json({
-    status: "healthy",
-    service: "oncosense",
-    timestamp: new Date().toISOString(),
-    version: "1.0.0"
+    status: "healthy", service: "oncosense",
+    timestamp: new Date().toISOString(), version: "1.0.0"
   });
 });
 
@@ -66,7 +64,6 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 app.use("/api",      apiLimit);
 app.use("/api/auth", authLimit);
 
-// All API routes
 app.use("/api/auth",            authRoutes);
 app.use("/api/users",           userRoutes);
 app.use("/api/profiles",        profileRoutes);
@@ -80,11 +77,38 @@ app.use("/api/notifications",   notificationRoutes);
 app.use("/api/admin",           adminAPIRoutes);
 app.use("/api/ai-chat",         aiChatRoutes);
 
-// Legacy unprefixed paths for Socket.IO
 app.use("/auth",    authRoutes);
 app.use("/ai-chat", aiChatRoutes);
 
 app.use("/api", errorHandler);
+
+const publicDir = path.resolve(__dirname, "..", "public");
+const indexHtml = path.join(publicDir, "index.html");
+
+logger.info(`publicDir: ${publicDir}`);
+logger.info(`indexHtml exists: ${fs.existsSync(indexHtml)}`);
+
+app.use(express.static(publicDir, {
+  maxAge: "1y",
+  etag: true,
+  index: false
+}));
+
+app.get("*", (req, res) => {
+  if (fs.existsSync(indexHtml)) {
+    return res.sendFile(indexHtml);
+  }
+  res.status(503).send(`
+    <!DOCTYPE html><html><head><title>OncoSense</title>
+    <style>body{font-family:sans-serif;padding:40px;background:#f0fdf8;color:#0d4d3c}</style>
+    </head><body>
+    <h1>🏥 OncoSense</h1>
+    <p>Frontend not found at: <code>${indexHtml}</code></p>
+    <p><a href="/health">API health check</a></p>
+    </body></html>
+  `);
+});
+
 app.use(errorHandler);
 
 module.exports = app;
