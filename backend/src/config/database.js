@@ -10,29 +10,43 @@ const getPool = () => {
     const dbUrl = process.env.DATABASE_URL;
 
     if (!dbUrl) {
-      throw new Error("DATABASE_URL environment variable is not set. Please add it in your Render dashboard under Environment Variables.");
+      throw new Error("DATABASE_URL environment variable is not set.");
     }
 
-    // Log the host being connected to (not the password) for debugging
+    // Detect URL type to configure SSL correctly:
+    // - Render INTERNAL URL: host ends in .internal or dpg-xxx (no SSL needed)
+    // - Render EXTERNAL URL: host ends in .render.com (SSL required)
+    // - Other hosts: Neon, Supabase, Railway (SSL required)
+    let sslConfig = false;
     try {
       const u = new URL(dbUrl);
-      logger.info(`DB connecting to host: ${u.hostname} port: ${u.port || 5432} db: ${u.pathname}`);
+      logger.info(`DB host: ${u.hostname} | port: ${u.port || 5432} | db: ${u.pathname}`);
+
+      const isRenderInternal = u.hostname.endsWith(".internal") ||
+                               (!u.hostname.includes(".") && u.hostname.length > 0);
+
+      const noSSLHosts = ["localhost", "127.0.0.1", "postgres", "db"];
+      const isLocal    = noSSLHosts.includes(u.hostname) || u.hostname.endsWith(".internal");
+
+      if (isLocal || isRenderInternal) {
+        sslConfig = false;
+        logger.info("SSL: disabled (internal/local connection)");
+      } else {
+        sslConfig = { rejectUnauthorized: false };
+        logger.info("SSL: enabled (external connection)");
+      }
     } catch (e) {
-      logger.error("DATABASE_URL is not a valid URL:", dbUrl.substring(0, 30));
-      throw new Error("DATABASE_URL is invalid. Expected format: postgresql://user:password@host:port/dbname");
+      logger.error("DATABASE_URL parse error:", e.message);
+      throw new Error("DATABASE_URL is not a valid PostgreSQL URL. Expected: postgresql://user:pass@host:port/dbname");
     }
 
     const config = {
       connectionString: dbUrl,
+      ssl: sslConfig,
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 15000,
     };
-
-    // SSL required for all managed PostgreSQL (Render, Railway, Supabase, Neon)
-    if (process.env.NODE_ENV === "production") {
-      config.ssl = { rejectUnauthorized: false };
-    }
 
     pool = new Pool(config);
     pool.on("error", (err) => logger.error("PG pool error:", err.message));
@@ -44,7 +58,7 @@ const connectDB = async () => {
   const client = await getPool().connect();
   try {
     await client.query("SELECT 1");
-    logger.info("DB ping OK");
+    logger.info("✅ DB connected successfully");
   } finally {
     client.release();
   }
@@ -79,10 +93,10 @@ const runMigrations = async () => {
   const migDir   = path.join(repoRoot, "db", "migrations");
   const seedDir  = path.join(repoRoot, "db", "seeds");
 
-  logger.info(`Migrations: ${migDir} — exists: ${fs.existsSync(migDir)}`);
+  logger.info(`Migrations dir: ${migDir} — exists: ${fs.existsSync(migDir)}`);
 
   if (!fs.existsSync(migDir)) {
-    logger.warn("Migrations dir not found — skipping");
+    logger.warn("Migrations directory not found — skipping");
     return;
   }
 
@@ -101,14 +115,14 @@ const runMigrations = async () => {
   const migFiles = fs.readdirSync(migDir).filter(f => f.endsWith(".sql")).sort();
   for (const file of migFiles) {
     if (done.has(file)) { logger.info(`Skip: ${file}`); continue; }
-    logger.info(`Applying: ${file}`);
+    logger.info(`Applying migration: ${file}`);
     const sql = fs.readFileSync(path.join(migDir, file), "utf8");
     try {
       await getPool().query(sql);
       await getPool().query(
         "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]
       );
-      logger.info(`✅ ${file}`);
+      logger.info(`✅ Migration: ${file}`);
     } catch (err) {
       logger.error(`Migration failed: ${file} — ${err.message}`);
     }
@@ -126,7 +140,7 @@ const runMigrations = async () => {
         await getPool().query(
           "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]
         );
-        logger.info(`✅ seed: ${file}`);
+        logger.info(`✅ Seed: ${file}`);
       } catch (err) {
         logger.warn(`Seed warning: ${file} — ${err.message}`);
         await getPool().query(
@@ -136,7 +150,7 @@ const runMigrations = async () => {
     }
   }
 
-  logger.info("✅ All migrations done");
+  logger.info("✅ All migrations complete");
 };
 
 module.exports = { getPool, connectDB, query, transaction, runMigrations };
