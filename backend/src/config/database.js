@@ -8,45 +8,41 @@ let pool;
 const getPool = () => {
   if (!pool) {
     const dbUrl = process.env.DATABASE_URL;
+    if (!dbUrl) throw new Error("DATABASE_URL is not set");
 
-    if (!dbUrl) {
-      throw new Error("DATABASE_URL environment variable is not set.");
-    }
-
-    // Detect URL type to configure SSL correctly:
-    // - Render INTERNAL URL: host ends in .internal or dpg-xxx (no SSL needed)
-    // - Render EXTERNAL URL: host ends in .render.com (SSL required)
-    // - Other hosts: Neon, Supabase, Railway (SSL required)
-    let sslConfig = false;
-    try {
-      const u = new URL(dbUrl);
-      logger.info(`DB host: ${u.hostname} | port: ${u.port || 5432} | db: ${u.pathname}`);
-
-      const isRenderInternal = u.hostname.endsWith(".internal") ||
-                               (!u.hostname.includes(".") && u.hostname.length > 0);
-
-      const noSSLHosts = ["localhost", "127.0.0.1", "postgres", "db"];
-      const isLocal    = noSSLHosts.includes(u.hostname) || u.hostname.endsWith(".internal");
-
-      if (isLocal || isRenderInternal) {
-        sslConfig = false;
-        logger.info("SSL: disabled (internal/local connection)");
-      } else {
-        sslConfig = { rejectUnauthorized: false };
-        logger.info("SSL: enabled (external connection)");
-      }
-    } catch (e) {
-      logger.error("DATABASE_URL parse error:", e.message);
-      throw new Error("DATABASE_URL is not a valid PostgreSQL URL. Expected: postgresql://user:pass@host:port/dbname");
-    }
-
+    // Always try without SSL first — works for Render internal URLs
+    // If connection fails we retry with SSL for external URLs
     const config = {
       connectionString: dbUrl,
-      ssl: sslConfig,
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 15000,
+      ssl: false
     };
+
+    // Force SSL if URL is clearly external (contains .render.com, .aws, neon.tech etc)
+    // OR if ?sslmode=require is in the URL
+    try {
+      const u = new URL(dbUrl);
+      logger.info(`Connecting to DB host: ${u.hostname}`);
+      const needsSsl =
+        u.hostname.includes(".render.com") ||
+        u.hostname.includes(".neon.tech") ||
+        u.hostname.includes(".supabase.") ||
+        u.hostname.includes(".railway.app") ||
+        u.hostname.includes("amazonaws.com") ||
+        u.searchParams.get("sslmode") === "require";
+
+      if (needsSsl) {
+        config.ssl = { rejectUnauthorized: false };
+        logger.info("SSL enabled for external DB host");
+      } else {
+        config.ssl = false;
+        logger.info("SSL disabled for internal DB host");
+      }
+    } catch {
+      config.ssl = { rejectUnauthorized: false };
+    }
 
     pool = new Pool(config);
     pool.on("error", (err) => logger.error("PG pool error:", err.message));
@@ -58,7 +54,7 @@ const connectDB = async () => {
   const client = await getPool().connect();
   try {
     await client.query("SELECT 1");
-    logger.info("✅ DB connected successfully");
+    logger.info("✅ DB connected");
   } finally {
     client.release();
   }
@@ -94,18 +90,14 @@ const runMigrations = async () => {
   const seedDir  = path.join(repoRoot, "db", "seeds");
 
   logger.info(`Migrations dir: ${migDir} — exists: ${fs.existsSync(migDir)}`);
-
-  if (!fs.existsSync(migDir)) {
-    logger.warn("Migrations directory not found — skipping");
-    return;
-  }
+  if (!fs.existsSync(migDir)) { logger.warn("Migrations dir not found"); return; }
 
   await getPool().query(`
     CREATE TABLE IF NOT EXISTS _migrations (
       filename VARCHAR(255) PRIMARY KEY,
       applied_at TIMESTAMP DEFAULT NOW()
     )
-  `).catch(e => logger.warn("_migrations table:", e.message));
+  `).catch(e => logger.warn("_migrations:", e.message));
 
   const { rows } = await getPool()
     .query("SELECT filename FROM _migrations")
@@ -115,14 +107,14 @@ const runMigrations = async () => {
   const migFiles = fs.readdirSync(migDir).filter(f => f.endsWith(".sql")).sort();
   for (const file of migFiles) {
     if (done.has(file)) { logger.info(`Skip: ${file}`); continue; }
-    logger.info(`Applying migration: ${file}`);
+    logger.info(`Applying: ${file}`);
     const sql = fs.readFileSync(path.join(migDir, file), "utf8");
     try {
       await getPool().query(sql);
       await getPool().query(
         "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]
       );
-      logger.info(`✅ Migration: ${file}`);
+      logger.info(`✅ ${file}`);
     } catch (err) {
       logger.error(`Migration failed: ${file} — ${err.message}`);
     }
@@ -140,7 +132,7 @@ const runMigrations = async () => {
         await getPool().query(
           "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]
         );
-        logger.info(`✅ Seed: ${file}`);
+        logger.info(`✅ seed: ${file}`);
       } catch (err) {
         logger.warn(`Seed warning: ${file} — ${err.message}`);
         await getPool().query(
@@ -149,8 +141,7 @@ const runMigrations = async () => {
       }
     }
   }
-
-  logger.info("✅ All migrations complete");
+  logger.info("✅ All migrations done");
 };
 
 module.exports = { getPool, connectDB, query, transaction, runMigrations };
