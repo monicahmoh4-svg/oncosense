@@ -7,16 +7,33 @@ let pool;
 
 const getPool = () => {
   if (!pool) {
-    if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
+    const dbUrl = process.env.DATABASE_URL;
+
+    if (!dbUrl) {
+      throw new Error("DATABASE_URL environment variable is not set. Please add it in your Render dashboard under Environment Variables.");
+    }
+
+    // Log the host being connected to (not the password) for debugging
+    try {
+      const u = new URL(dbUrl);
+      logger.info(`DB connecting to host: ${u.hostname} port: ${u.port || 5432} db: ${u.pathname}`);
+    } catch (e) {
+      logger.error("DATABASE_URL is not a valid URL:", dbUrl.substring(0, 30));
+      throw new Error("DATABASE_URL is invalid. Expected format: postgresql://user:password@host:port/dbname");
+    }
+
     const config = {
-      connectionString: process.env.DATABASE_URL,
+      connectionString: dbUrl,
       max: 10,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 15000,
     };
+
+    // SSL required for all managed PostgreSQL (Render, Railway, Supabase, Neon)
     if (process.env.NODE_ENV === "production") {
       config.ssl = { rejectUnauthorized: false };
     }
+
     pool = new Pool(config);
     pool.on("error", (err) => logger.error("PG pool error:", err.message));
   }
@@ -74,7 +91,7 @@ const runMigrations = async () => {
       filename VARCHAR(255) PRIMARY KEY,
       applied_at TIMESTAMP DEFAULT NOW()
     )
-  `).catch(e => logger.warn("_migrations:", e.message));
+  `).catch(e => logger.warn("_migrations table:", e.message));
 
   const { rows } = await getPool()
     .query("SELECT filename FROM _migrations")
