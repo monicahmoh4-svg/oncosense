@@ -4,22 +4,22 @@ services:
     runtime: node
     region: oregon
     plan: free
-    buildCommand: npm run build
-    startCommand: npm start
+    buildCommand: node scripts/build.js
+    startCommand: node backend/src/server.js
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
-        value: 20.0.0
+        value: 20.11.0
       - key: JWT_SECRET
         sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: DATABASE_URL
         sync: false
-      - key: REDIS_URL
-        sync: false
+      - key: BCRYPT_ROUNDS
+        value: "10"
 
 databases:
   - name: oncosense-db
