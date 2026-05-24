@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require("uuid");
 const { query } = require("../config/database");
 const logger = require("../utils/logger");
 
-const JWT_SECRET    = process.env.JWT_SECRET    || "oncosense_jwt_secret_dev";
+const JWT_SECRET     = process.env.JWT_SECRET     || "oncosense_dev_secret";
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 const BCRYPT_ROUNDS  = parseInt(process.env.BCRYPT_ROUNDS) || 10;
 
@@ -17,45 +17,30 @@ const generateToken = (user) =>
 
 exports.register = async (req, res) => {
   try {
-    const {
-      first_name, last_name, password,
-      role = "patient", preferred_language = "en"
-    } = req.body;
+    const { first_name, last_name, password, role = "patient", preferred_language = "en" } = req.body;
+    const email = req.body.email && String(req.body.email).trim() ? String(req.body.email).trim().toLowerCase() : null;
+    const phone = req.body.phone && String(req.body.phone).trim() ? String(req.body.phone).trim() : null;
 
-    const email = req.body.email && req.body.email.trim() !== ""
-      ? req.body.email.trim().toLowerCase() : null;
-    const phone = req.body.phone && req.body.phone.trim() !== ""
-      ? req.body.phone.trim() : null;
+    if (!first_name || !String(first_name).trim()) return res.status(400).json({ error: "First name is required" });
+    if (!last_name  || !String(last_name).trim())  return res.status(400).json({ error: "Last name is required" });
+    if (!password   || String(password).length < 6) return res.status(400).json({ error: "Password must be at least 6 characters" });
+    if (!email && !phone) return res.status(400).json({ error: "Email or phone number is required" });
 
-    if (!first_name || !last_name) {
-      return res.status(400).json({ error: "First name and last name are required" });
-    }
-    if (!password || password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters" });
-    }
-    if (!email && !phone) {
-      return res.status(400).json({ error: "Email or phone number is required" });
-    }
-
-    // Check duplicates
     if (email) {
       const ex = await query("SELECT id FROM users WHERE email = $1", [email]);
-      if (ex.rows.length > 0) return res.status(409).json({ error: "Email already registered" });
+      if (ex.rows.length) return res.status(409).json({ error: "Email already registered" });
     }
     if (phone) {
       const ex = await query("SELECT id FROM users WHERE phone = $1", [phone]);
-      if (ex.rows.length > 0) return res.status(409).json({ error: "Phone already registered" });
+      if (ex.rows.length) return res.status(409).json({ error: "Phone already registered" });
     }
 
-    const password_hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-
+    const hash   = await bcrypt.hash(String(password), BCRYPT_ROUNDS);
     const result = await query(
-      `INSERT INTO users
-         (id, email, phone, password_hash, role, first_name, last_name, preferred_language, is_active, is_verified)
+      `INSERT INTO users (id, email, phone, password_hash, role, first_name, last_name, preferred_language, is_active, is_verified)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,false)
        RETURNING id, email, phone, role, first_name, last_name, preferred_language`,
-      [uuidv4(), email, phone, password_hash, role,
-       first_name.trim(), last_name.trim(), preferred_language]
+      [uuidv4(), email, phone, hash, role, String(first_name).trim(), String(last_name).trim(), preferred_language]
     );
 
     const user  = result.rows[0];
@@ -65,20 +50,16 @@ exports.register = async (req, res) => {
     return res.status(201).json({
       message: "Account created successfully",
       user: {
-        id: user.id, email: user.email, phone: user.phone,
-        role: user.role, first_name: user.first_name,
-        last_name: user.last_name, preferred_language: user.preferred_language
+        id: user.id, email: user.email, phone: user.phone, role: user.role,
+        first_name: user.first_name, last_name: user.last_name,
+        preferred_language: user.preferred_language
       },
       token
     });
   } catch (err) {
-    logger.error("Register error:", err.message, err.code);
-    if (err.code === "23505") {
-      return res.status(409).json({ error: "Account already exists with that email or phone" });
-    }
-    if (err.code === "42P01") {
-      return res.status(503).json({ error: "Database tables not ready yet. Please wait 30 seconds and try again." });
-    }
+    logger.error("Register error:", err.message, "code:", err.code);
+    if (err.code === "23505") return res.status(409).json({ error: "Account already exists with that email or phone" });
+    if (err.code === "42P01") return res.status(503).json({ error: "Database not ready. Please wait 30 seconds and try again." });
     return res.status(500).json({ error: "Registration failed: " + err.message });
   }
 };
@@ -86,40 +67,29 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { identifier, password } = req.body;
+    if (!identifier || !password) return res.status(400).json({ error: "Email/phone and password are required" });
 
-    if (!identifier || !password) {
-      return res.status(400).json({ error: "Email/phone and password are required" });
-    }
+    const id = String(identifier).trim();
 
-    const id = identifier.trim();
-
-    // Try email first, then phone — separate queries avoid type errors
     let result = await query(
-      `SELECT id, email, phone, password_hash, role, first_name, last_name,
-              preferred_language, is_active
+      `SELECT id, email, phone, password_hash, role, first_name, last_name, preferred_language, is_active
        FROM users WHERE email = $1 AND is_active = true`,
       [id.toLowerCase()]
     );
 
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       result = await query(
-        `SELECT id, email, phone, password_hash, role, first_name, last_name,
-                preferred_language, is_active
+        `SELECT id, email, phone, password_hash, role, first_name, last_name, preferred_language, is_active
          FROM users WHERE phone = $1 AND is_active = true`,
         [id]
       );
     }
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: "Invalid email/phone or password" });
-    }
+    if (!result.rows.length) return res.status(401).json({ error: "Invalid email/phone or password" });
 
     const user  = result.rows[0];
-    const valid = await bcrypt.compare(password, user.password_hash);
-
-    if (!valid) {
-      return res.status(401).json({ error: "Invalid email/phone or password" });
-    }
+    const valid = await bcrypt.compare(String(password), user.password_hash);
+    if (!valid) return res.status(401).json({ error: "Invalid email/phone or password" });
 
     await query("UPDATE users SET last_login = NOW() WHERE id = $1", [user.id]).catch(() => {});
 
@@ -129,38 +99,31 @@ exports.login = async (req, res) => {
     return res.json({
       message: "Login successful",
       user: {
-        id: user.id, email: user.email, phone: user.phone,
-        role: user.role, first_name: user.first_name,
-        last_name: user.last_name, preferred_language: user.preferred_language
+        id: user.id, email: user.email, phone: user.phone, role: user.role,
+        first_name: user.first_name, last_name: user.last_name,
+        preferred_language: user.preferred_language
       },
       token
     });
   } catch (err) {
-    logger.error("Login error:", err.message, err.code);
-    if (err.code === "42P01") {
-      return res.status(503).json({ error: "Database tables not ready yet. Please wait 30 seconds and try again." });
-    }
+    logger.error("Login error:", err.message, "code:", err.code);
+    if (err.code === "42P01") return res.status(503).json({ error: "Database not ready. Please wait 30 seconds and try again." });
     return res.status(500).json({ error: "Login failed: " + err.message });
   }
 };
 
-exports.logout = async (req, res) => {
-  res.json({ message: "Logged out successfully" });
-};
+exports.logout = (req, res) => res.json({ message: "Logged out successfully" });
 
 exports.refreshToken = async (req, res) => {
   try {
     const { token } = req.body;
     if (!token) return res.status(400).json({ error: "Token required" });
-
     const decoded = jwt.verify(token, JWT_SECRET);
     const result  = await query(
       "SELECT id, email, phone, role, first_name, last_name FROM users WHERE id = $1 AND is_active = true",
       [decoded.id]
     );
-
     if (!result.rows.length) return res.status(401).json({ error: "User not found" });
-
     return res.json({ token: generateToken(result.rows[0]) });
   } catch (err) {
     if (err.name === "JsonWebTokenError" || err.name === "TokenExpiredError") {
@@ -193,11 +156,9 @@ exports.changePassword = async (req, res) => {
     const { current_password, new_password } = req.body;
     const result = await query("SELECT password_hash FROM users WHERE id = $1", [req.user.id]);
     if (!result.rows.length) return res.status(404).json({ error: "User not found" });
-
-    const valid = await bcrypt.compare(current_password, result.rows[0].password_hash);
+    const valid = await bcrypt.compare(String(current_password), result.rows[0].password_hash);
     if (!valid) return res.status(400).json({ error: "Current password incorrect" });
-
-    const hash = await bcrypt.hash(new_password, BCRYPT_ROUNDS);
+    const hash = await bcrypt.hash(String(new_password), BCRYPT_ROUNDS);
     await query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [hash, req.user.id]);
     return res.json({ message: "Password updated successfully" });
   } catch (err) {
@@ -205,6 +166,5 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-exports.forgotPassword = async (req, res) => {
+exports.forgotPassword = (req, res) =>
   res.json({ message: "If the account exists, a reset link has been sent." });
-};
