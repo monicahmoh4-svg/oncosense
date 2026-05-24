@@ -5,64 +5,67 @@ const logger = require("../utils/logger");
 
 let pool;
 
-const getPool = () => {
-  if (!pool) {
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl) throw new Error("DATABASE_URL is not set");
-
-    // Always try without SSL first — works for Render internal URLs
-    // If connection fails we retry with SSL for external URLs
-    const config = {
+const createPool = async (dbUrl) => {
+  // Try with SSL first (external URLs)
+  try {
+    const p = new Pool({
       connectionString: dbUrl,
+      ssl: { rejectUnauthorized: false },
       max: 10,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 15000,
-      ssl: false
-    };
-
-    // Force SSL if URL is clearly external (contains .render.com, .aws, neon.tech etc)
-    // OR if ?sslmode=require is in the URL
-    try {
-      const u = new URL(dbUrl);
-      logger.info(`Connecting to DB host: ${u.hostname}`);
-      const needsSsl =
-        u.hostname.includes(".render.com") ||
-        u.hostname.includes(".neon.tech") ||
-        u.hostname.includes(".supabase.") ||
-        u.hostname.includes(".railway.app") ||
-        u.hostname.includes("amazonaws.com") ||
-        u.searchParams.get("sslmode") === "require";
-
-      if (needsSsl) {
-        config.ssl = { rejectUnauthorized: false };
-        logger.info("SSL enabled for external DB host");
-      } else {
-        config.ssl = false;
-        logger.info("SSL disabled for internal DB host");
-      }
-    } catch {
-      config.ssl = { rejectUnauthorized: false };
-    }
-
-    pool = new Pool(config);
-    pool.on("error", (err) => logger.error("PG pool error:", err.message));
+      connectionTimeoutMillis: 10000,
+    });
+    const client = await p.connect();
+    await client.query("SELECT 1");
+    client.release();
+    logger.info("DB pool created WITH SSL");
+    p.on("error", (err) => logger.error("PG pool error:", err.message));
+    return p;
+  } catch (sslErr) {
+    logger.warn(`SSL failed: ${sslErr.message} — trying without SSL`);
   }
+
+  // Try without SSL (internal URLs)
+  try {
+    const p = new Pool({
+      connectionString: dbUrl,
+      ssl: false,
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+    });
+    const client = await p.connect();
+    await client.query("SELECT 1");
+    client.release();
+    logger.info("DB pool created WITHOUT SSL");
+    p.on("error", (err) => logger.error("PG pool error:", err.message));
+    return p;
+  } catch (noSslErr) {
+    throw new Error(`DB connection failed both ways. Last error: ${noSslErr.message}`);
+  }
+};
+
+const getPool = () => {
+  if (!pool) throw new Error("Database not initialised yet");
   return pool;
 };
 
 const connectDB = async () => {
-  const client = await getPool().connect();
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL environment variable is not set");
   try {
-    await client.query("SELECT 1");
-    logger.info("✅ DB connected");
-  } finally {
-    client.release();
+    const u = new URL(dbUrl);
+    logger.info(`DB host: ${u.hostname} db: ${u.pathname}`);
+  } catch {
+    throw new Error(`DATABASE_URL is not a valid URL: "${dbUrl.substring(0, 40)}"`);
   }
+  pool = await createPool(dbUrl);
 };
 
 const query = async (text, params) => {
+  if (!pool) throw new Error("Database not connected");
   try {
-    return await getPool().query(text, params);
+    return await pool.query(text, params);
   } catch (err) {
     logger.error("Query error:", { sql: text.substring(0, 100), error: err.message, code: err.code });
     throw err;
@@ -70,7 +73,8 @@ const query = async (text, params) => {
 };
 
 const transaction = async (callback) => {
-  const client = await getPool().connect();
+  if (!pool) throw new Error("Database not connected");
+  const client = await pool.connect();
   try {
     await client.query("BEGIN");
     const result = await callback(client);
@@ -92,14 +96,14 @@ const runMigrations = async () => {
   logger.info(`Migrations dir: ${migDir} — exists: ${fs.existsSync(migDir)}`);
   if (!fs.existsSync(migDir)) { logger.warn("Migrations dir not found"); return; }
 
-  await getPool().query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS _migrations (
       filename VARCHAR(255) PRIMARY KEY,
       applied_at TIMESTAMP DEFAULT NOW()
     )
   `).catch(e => logger.warn("_migrations:", e.message));
 
-  const { rows } = await getPool()
+  const { rows } = await pool
     .query("SELECT filename FROM _migrations")
     .catch(() => ({ rows: [] }));
   const done = new Set(rows.map(r => r.filename));
@@ -110,8 +114,8 @@ const runMigrations = async () => {
     logger.info(`Applying: ${file}`);
     const sql = fs.readFileSync(path.join(migDir, file), "utf8");
     try {
-      await getPool().query(sql);
-      await getPool().query(
+      await pool.query(sql);
+      await pool.query(
         "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]
       );
       logger.info(`✅ ${file}`);
@@ -128,14 +132,14 @@ const runMigrations = async () => {
       logger.info(`Seeding: ${file}`);
       const sql = fs.readFileSync(path.join(seedDir, file), "utf8");
       try {
-        await getPool().query(sql);
-        await getPool().query(
+        await pool.query(sql);
+        await pool.query(
           "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]
         );
         logger.info(`✅ seed: ${file}`);
       } catch (err) {
         logger.warn(`Seed warning: ${file} — ${err.message}`);
-        await getPool().query(
+        await pool.query(
           "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]
         ).catch(() => {});
       }
