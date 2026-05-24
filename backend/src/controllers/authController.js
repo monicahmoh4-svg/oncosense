@@ -17,13 +17,6 @@ const generateToken = (user) =>
 
 exports.register = async (req, res) => {
   try {
-    // Check DB is available first
-    if (!process.env.DATABASE_URL) {
-      return res.status(503).json({
-        error: "Database not configured. Please contact the administrator."
-      });
-    }
-
     const { first_name, last_name, password, role = "patient", preferred_language = "en" } = req.body;
     const email = req.body.email && String(req.body.email).trim() ? String(req.body.email).trim().toLowerCase() : null;
     const phone = req.body.phone && String(req.body.phone).trim() ? String(req.body.phone).trim() : null;
@@ -44,10 +37,12 @@ exports.register = async (req, res) => {
 
     const hash   = await bcrypt.hash(String(password), BCRYPT_ROUNDS);
     const result = await query(
-      `INSERT INTO users (id, email, phone, password_hash, role, first_name, last_name, preferred_language, is_active, is_verified)
+      `INSERT INTO users
+         (id, email, phone, password_hash, role, first_name, last_name, preferred_language, is_active, is_verified)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,true,false)
        RETURNING id, email, phone, role, first_name, last_name, preferred_language`,
-      [uuidv4(), email, phone, hash, role, String(first_name).trim(), String(last_name).trim(), preferred_language]
+      [uuidv4(), email, phone, hash, role,
+       String(first_name).trim(), String(last_name).trim(), preferred_language]
     );
 
     const user  = result.rows[0];
@@ -65,26 +60,14 @@ exports.register = async (req, res) => {
     });
   } catch (err) {
     logger.error("Register error:", err.message, "code:", err.code);
-    if (err.code === "23505")  return res.status(409).json({ error: "Account already exists with that email or phone" });
-    if (err.code === "42P01")  return res.status(503).json({ error: "Database tables not ready. Please wait 30 seconds and try again." });
-    if (err.code === "ENOTFOUND" || err.message.includes("ENOTFOUND")) {
-      return res.status(503).json({ error: "Cannot reach database. Please check DATABASE_URL is correctly set in Render environment variables." });
-    }
-    if (err.message.includes("DATABASE_URL")) {
-      return res.status(503).json({ error: err.message });
-    }
-    return res.status(500).json({ error: "Registration failed: " + err.message });
+    if (err.code === "23505") return res.status(409).json({ error: "Account already exists with that email or phone" });
+    if (err.code === "42P01") return res.status(503).json({ error: "Database tables not ready. Please wait 30 seconds and try again." });
+    return res.status(500).json({ error: err.message });
   }
 };
 
 exports.login = async (req, res) => {
   try {
-    if (!process.env.DATABASE_URL) {
-      return res.status(503).json({
-        error: "Database not configured. Please contact the administrator."
-      });
-    }
-
     const { identifier, password } = req.body;
     if (!identifier || !password) return res.status(400).json({ error: "Email/phone and password are required" });
 
@@ -127,13 +110,7 @@ exports.login = async (req, res) => {
   } catch (err) {
     logger.error("Login error:", err.message, "code:", err.code);
     if (err.code === "42P01") return res.status(503).json({ error: "Database tables not ready. Please wait 30 seconds and try again." });
-    if (err.code === "ENOTFOUND" || err.message.includes("ENOTFOUND")) {
-      return res.status(503).json({ error: "Cannot reach database. Please check DATABASE_URL is correctly set in Render environment variables." });
-    }
-    if (err.message.includes("DATABASE_URL")) {
-      return res.status(503).json({ error: err.message });
-    }
-    return res.status(500).json({ error: "Login failed: " + err.message });
+    return res.status(500).json({ error: err.message });
   }
 };
 
