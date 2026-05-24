@@ -1,10 +1,7 @@
 const express = require("express");
 const router  = express.Router();
-const authController = require("../controllers/authController");
+const authController   = require("../controllers/authController");
 const { authenticate } = require("../middleware/auth");
-
-// No express-validator — all validation is done inside the controller
-// This removes all false "Validation failed" errors from isMobilePhone() etc.
 
 router.post("/register",        authController.register);
 router.post("/login",           authController.login);
