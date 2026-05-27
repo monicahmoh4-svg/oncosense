@@ -56,7 +56,8 @@ export const consultationService = {
 }
 
 export const clinicService = {
-  getAll: (params) => api.get('/clinics', { params }),
+  getAll:    (params) => api.get('/clinics', { params }),
+  getCounties: (country = 'Kenya') => api.get('/clinics/counties', { params: { country } }),
 }
 
 export const recommendationService = {
