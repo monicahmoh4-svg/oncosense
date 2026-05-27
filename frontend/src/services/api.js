@@ -1,16 +1,11 @@
 import axios from 'axios'
 
-// VITE_API_URL is set in Railway frontend service environment variables
-// to the full backend URL e.g. https://oncosense-backend.up.railway.app
-const API_URL = import.meta.env.VITE_API_URL || ''
-
 const api = axios.create({
-  baseURL: API_URL,
+  baseURL: '/api',
   timeout: 30000,
   headers: { 'Content-Type': 'application/json' }
 })
 
-// Attach JWT token to every request
 api.interceptors.request.use(
   (config) => {
     const stored = localStorage.getItem('oncosense-auth')
@@ -25,7 +20,6 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 )
 
-// Handle 401 globally
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -54,11 +48,11 @@ export const profileService = {
 }
 
 export const consultationService = {
-  create:      (data) => api.post('/consultations', data),
-  getAll:      ()     => api.get('/consultations'),
-  getById:     (id)   => api.get(`/consultations/${id}`),
+  create:      (data)     => api.post('/consultations', data),
+  getAll:      ()         => api.get('/consultations'),
+  getById:     (id)       => api.get(`/consultations/${id}`),
   complete:    (id, data) => api.patch(`/consultations/${id}/complete`, data),
-  getMessages: (id)   => api.get(`/messages/${id}`),
+  getMessages: (id)       => api.get(`/messages/${id}`),
 }
 
 export const clinicService = {
