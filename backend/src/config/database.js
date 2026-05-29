@@ -6,14 +6,11 @@ const logger = require("../utils/logger");
 let pool;
 
 const createPool = async (dbUrl) => {
-  // Try with SSL first (external URLs)
   try {
     const p = new Pool({
       connectionString: dbUrl,
       ssl: { rejectUnauthorized: false },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+      max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000,
     });
     const client = await p.connect();
     await client.query("SELECT 1");
@@ -25,14 +22,11 @@ const createPool = async (dbUrl) => {
     logger.warn(`SSL failed: ${sslErr.message} — trying without SSL`);
   }
 
-  // Try without SSL (internal URLs)
   try {
     const p = new Pool({
       connectionString: dbUrl,
       ssl: false,
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+      max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 10000,
     });
     const client = await p.connect();
     await client.query("SELECT 1");
@@ -41,7 +35,7 @@ const createPool = async (dbUrl) => {
     p.on("error", (err) => logger.error("PG pool error:", err.message));
     return p;
   } catch (noSslErr) {
-    throw new Error(`DB connection failed both ways. Last error: ${noSslErr.message}`);
+    throw new Error(`DB connection failed both ways. Error: ${noSslErr.message}`);
   }
 };
 
@@ -52,12 +46,12 @@ const getPool = () => {
 
 const connectDB = async () => {
   const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) throw new Error("DATABASE_URL environment variable is not set");
+  if (!dbUrl) throw new Error("DATABASE_URL is not set");
   try {
     const u = new URL(dbUrl);
     logger.info(`DB host: ${u.hostname} db: ${u.pathname}`);
   } catch {
-    throw new Error(`DATABASE_URL is not a valid URL: "${dbUrl.substring(0, 40)}"`);
+    throw new Error(`DATABASE_URL invalid: "${dbUrl.substring(0, 40)}"`);
   }
   pool = await createPool(dbUrl);
 };
@@ -93,7 +87,9 @@ const runMigrations = async () => {
   const migDir   = path.join(repoRoot, "db", "migrations");
   const seedDir  = path.join(repoRoot, "db", "seeds");
 
-  logger.info(`Migrations dir: ${migDir} — exists: ${fs.existsSync(migDir)}`);
+  logger.info(`repoRoot: ${repoRoot}`);
+  logger.info(`migDir: ${migDir} — exists: ${fs.existsSync(migDir)}`);
+
   if (!fs.existsSync(migDir)) { logger.warn("Migrations dir not found"); return; }
 
   await pool.query(`
@@ -103,48 +99,48 @@ const runMigrations = async () => {
     )
   `).catch(e => logger.warn("_migrations:", e.message));
 
-  const { rows } = await pool
-    .query("SELECT filename FROM _migrations")
-    .catch(() => ({ rows: [] }));
+  const { rows } = await pool.query("SELECT filename FROM _migrations").catch(() => ({ rows: [] }));
   const done = new Set(rows.map(r => r.filename));
 
   const migFiles = fs.readdirSync(migDir).filter(f => f.endsWith(".sql")).sort();
   for (const file of migFiles) {
-    if (done.has(file)) { logger.info(`Skip: ${file}`); continue; }
-    logger.info(`Applying: ${file}`);
+    if (done.has(file)) { logger.info(`Skip migration: ${file}`); continue; }
+    logger.info(`Applying migration: ${file}`);
     const sql = fs.readFileSync(path.join(migDir, file), "utf8");
     try {
       await pool.query(sql);
-      await pool.query(
-        "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]
-      );
-      logger.info(`✅ ${file}`);
+      await pool.query("INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [file]);
+      logger.info(`✅ Migration: ${file}`);
     } catch (err) {
       logger.error(`Migration failed: ${file} — ${err.message}`);
     }
   }
 
   if (fs.existsSync(seedDir)) {
-    const seedFiles = fs.readdirSync(seedDir).filter(f => f.endsWith(".sql")).sort();
+    const forceReseed = process.env.FORCE_RESEED === "true";
+    const seedFiles   = fs.readdirSync(seedDir).filter(f => f.endsWith(".sql")).sort();
+
     for (const file of seedFiles) {
       const key = `seed:${file}`;
-      if (done.has(key)) { logger.info(`Skip seed: ${file}`); continue; }
-      logger.info(`Seeding: ${file}`);
+      if (done.has(key) && !forceReseed) { logger.info(`Skip seed: ${file}`); continue; }
+      if (forceReseed) {
+        await pool.query("DELETE FROM _migrations WHERE filename = $1", [key]).catch(() => {});
+        logger.info(`Force re-seed: ${file}`);
+      } else {
+        logger.info(`Applying seed: ${file}`);
+      }
       const sql = fs.readFileSync(path.join(seedDir, file), "utf8");
       try {
         await pool.query(sql);
-        await pool.query(
-          "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]
-        );
-        logger.info(`✅ seed: ${file}`);
+        await pool.query("INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]);
+        logger.info(`✅ Seed: ${file}`);
       } catch (err) {
         logger.warn(`Seed warning: ${file} — ${err.message}`);
-        await pool.query(
-          "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]
-        ).catch(() => {});
+        await pool.query("INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [key]).catch(() => {});
       }
     }
   }
+
   logger.info("✅ All migrations done");
 };
 
