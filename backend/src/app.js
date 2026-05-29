@@ -52,7 +52,6 @@ const authLimit = rateLimit({
   standardHeaders: true, legacyHeaders: false
 });
 
-// Health check
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "healthy", service: "oncosense",
@@ -60,54 +59,29 @@ app.get("/health", (req, res) => {
   });
 });
 
-// DB diagnostic — visit /debug-db to see connection status
 app.get("/debug-db", async (req, res) => {
   const dbUrl = process.env.DATABASE_URL;
-  if (!dbUrl) {
-    return res.json({ error: "DATABASE_URL is NOT set in environment variables" });
-  }
-
+  if (!dbUrl) return res.json({ error: "DATABASE_URL is not set" });
   let info = {};
   try {
     const u = new URL(dbUrl);
-    info = {
-      hostname: u.hostname,
-      port: u.port || "5432",
-      database: u.pathname,
-      username: u.username,
-      hasPassword: !!u.password,
-      urlLength: dbUrl.length,
-    };
+    info = { hostname: u.hostname, port: u.port || "5432", database: u.pathname, username: u.username, hasPassword: !!u.password };
   } catch (e) {
-    return res.json({ error: "DATABASE_URL is not a valid URL", raw: dbUrl.substring(0, 50) });
+    return res.json({ error: "DATABASE_URL is not valid", raw: dbUrl.substring(0, 50) });
   }
-
-  // Test with SSL
   try {
     const { Pool } = require("pg");
     const p = new Pool({ connectionString: dbUrl, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 8000 });
-    const c = await p.connect();
-    await c.query("SELECT 1");
-    c.release();
-    await p.end();
-    return res.json({ ...info, result: "SUCCESS with SSL — use External URL" });
+    const c = await p.connect(); await c.query("SELECT 1"); c.release(); await p.end();
+    return res.json({ ...info, result: "SUCCESS with SSL" });
   } catch (e1) {
-    // Test without SSL
     try {
       const { Pool } = require("pg");
       const p = new Pool({ connectionString: dbUrl, ssl: false, connectionTimeoutMillis: 8000 });
-      const c = await p.connect();
-      await c.query("SELECT 1");
-      c.release();
-      await p.end();
-      return res.json({ ...info, result: "SUCCESS without SSL — use Internal URL" });
+      const c = await p.connect(); await c.query("SELECT 1"); c.release(); await p.end();
+      return res.json({ ...info, result: "SUCCESS without SSL" });
     } catch (e2) {
-      return res.json({
-        ...info,
-        result: "FAILED",
-        sslError: e1.message,
-        noSslError: e2.message
-      });
+      return res.json({ ...info, result: "FAILED", sslError: e1.message, noSslError: e2.message });
     }
   }
 });
@@ -138,21 +112,16 @@ const publicDir = path.resolve(__dirname, "..", "public");
 const indexHtml = path.join(publicDir, "index.html");
 
 logger.info(`publicDir: ${publicDir}`);
-logger.info(`indexHtml exists: ${fs.existsSync(indexHtml)}`);
+logger.info(`index.html exists: ${fs.existsSync(indexHtml)}`);
 
 app.use(express.static(publicDir, { maxAge: "1y", etag: true, index: false }));
 
 app.get("*", (req, res) => {
   if (fs.existsSync(indexHtml)) return res.sendFile(indexHtml);
-  res.status(503).send(`
-    <!DOCTYPE html><html><head><title>OncoSense</title>
-    <style>body{font-family:sans-serif;padding:40px;background:#f0fdf8;color:#0d4d3c}</style>
-    </head><body>
-    <h1>🏥 OncoSense</h1>
-    <p>Frontend not found at: <code>${indexHtml}</code></p>
-    <p><a href="/health">API health</a> | <a href="/debug-db">DB debug</a></p>
-    </body></html>
-  `);
+  res.status(503).send(`<!DOCTYPE html><html><head><title>OncoSense</title>
+    <style>body{font-family:sans-serif;padding:40px;background:#f0fdf8}</style></head>
+    <body><h1>🏥 OncoSense</h1><p>Frontend not found.</p>
+    <p><a href="/health">API health</a> | <a href="/debug-db">DB debug</a></p></body></html>`);
 });
 
 app.use(errorHandler);
