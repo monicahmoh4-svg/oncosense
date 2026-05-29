@@ -8,13 +8,13 @@ const api = axios.create({
 
 api.interceptors.request.use(
   (config) => {
-    const stored = localStorage.getItem('oncosense-auth')
-    if (stored) {
-      try {
+    try {
+      const stored = localStorage.getItem('oncosense-auth')
+      if (stored) {
         const { state } = JSON.parse(stored)
         if (state?.token) config.headers.Authorization = `Bearer ${state.token}`
-      } catch {}
-    }
+      }
+    } catch {}
     return config
   },
   (error) => Promise.reject(error)
@@ -56,8 +56,8 @@ export const consultationService = {
 }
 
 export const clinicService = {
-  getAll:    (params) => api.get('/clinics', { params }),
-  getCounties: (country = 'Kenya') => api.get('/clinics/counties', { params: { country } }),
+  getAll:     (params)  => api.get('/clinics', { params }),
+  getCounties:(country) => api.get('/clinics/counties', { params: { country: country || 'Kenya' } }),
 }
 
 export const recommendationService = {
