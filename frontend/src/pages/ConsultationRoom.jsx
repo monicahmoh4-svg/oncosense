@@ -140,7 +140,8 @@ export default function ConsultationRoom() {
 
       // Fallback direct Gemini
       if (!aiText) {
-        var key = typeof import !== 'undefined' ? (import.meta?.env?.VITE_GEMINI_API_KEY || '') : ''
+     var key = import.meta.env.VITE_GEMINI_API_KEY || ''
+
         if (key) aiText = await callGemini(history, key)
       }
 
