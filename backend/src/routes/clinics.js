@@ -21,39 +21,36 @@ router.get("/counties", authenticate, async (req, res) => {
   }
 });
 
-// GET /clinics?country=Kenya&county=Nairobi&search=hospital
+// GET /clinics?country=Kenya&county=Nairobi&search=hospital&insurance=SHA
 router.get("/", authenticate, async (req, res) => {
   try {
-    const { country, county, region, search } = req.query;
+    const { country, county, region, search, insurance } = req.query;
     let where    = "WHERE is_active = true";
     const params = [];
     let p        = 0;
 
     if (country) {
-      p++;
-      where += ` AND country = $${p}`;
-      params.push(country);
+      p++; where += " AND country = $" + p; params.push(country);
     }
-
     const countyVal = county || region;
     if (countyVal) {
-      p++;
-      where += ` AND region = $${p}`;
-      params.push(countyVal);
+      p++; where += " AND region = $" + p; params.push(countyVal);
     }
-
     if (search) {
       p++;
-      where += ` AND (name ILIKE $${p} OR address ILIKE $${p} OR district ILIKE $${p})`;
-      params.push(`%${search}%`);
+      where += " AND (name ILIKE $" + p + " OR address ILIKE $" + p + " OR district ILIKE $" + p + ")";
+      params.push("%" + search + "%");
+    }
+    if (insurance) {
+      p++; where += " AND $" + p + " = ANY(insurance_accepted)"; params.push(insurance);
     }
 
     const result = await query(
-      `SELECT * FROM clinics ${where} ORDER BY name ASC LIMIT 100`,
+      "SELECT * FROM clinics " + where + " ORDER BY resource_level DESC, name ASC LIMIT 150",
       params
     );
 
-    logger.info(`Clinics: country=${country} county=${countyVal} found=${result.rows.length}`);
+    logger.info("Clinics: county=" + countyVal + " found=" + result.rows.length);
     res.json({ clinics: result.rows });
   } catch (err) {
     logger.error("Clinics error:", err.message);
