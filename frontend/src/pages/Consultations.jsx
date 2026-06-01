@@ -233,7 +233,7 @@ export default function Consultations() {
                             </div>
                           )}
                           {clinic.latitude && clinic.longitude && (
-                            
+                            <a
                               href={mapsUrl(clinic.latitude, clinic.longitude)}
                               target="_blank"
                               rel="noopener noreferrer"
@@ -316,7 +316,7 @@ export default function Consultations() {
             )}
 
             {selectedClinic.latitude && selectedClinic.longitude && (
-              
+              <a
                 href={mapsUrl(selectedClinic.latitude, selectedClinic.longitude)}
                 target="_blank"
                 rel="noopener noreferrer"
