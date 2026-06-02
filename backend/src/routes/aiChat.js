@@ -1,108 +1,123 @@
-/**
- * OncoSense AI Chat Route
- * Uses Google Gemini API (gemini-1.5-flash) as the AI backend.
- * API key is kept server-side — never exposed to the browser.
- */
-const express = require('express')
-const router  = express.Router()
-const axios   = require('axios')
-const { authenticate } = require('../middleware/auth')
-const logger  = require('../utils/logger')
+const express = require("express");
+const router  = express.Router();
+const axios   = require("axios");
+const { authenticate } = require("../middleware/auth");
+const logger  = require("../utils/logger");
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || ''
-const GEMINI_MODEL   = 'gemini-1.5-flash'
-const GEMINI_BASE    = 'https://generativelanguage.googleapis.com/v1beta/models'
+const GEMINI_KEY    = process.env.GEMINI_API_KEY;
+const GEMINI_URL    = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+const SYSTEM_PROMPT = `You are OncoSense AI, a compassionate and highly knowledgeable health assistant specialising in:
+- Cancer awareness, risk factors, and early detection
+- Cancer screening guidelines and recommendations
+- Symptoms that may indicate cancer or require medical evaluation
+- Healthy lifestyle and cancer prevention
+- Navigating the healthcare system in Kenya and Africa
 
-const SYSTEM_INSTRUCTION = `You are OncoSense AI, a compassionate health assistant specialising in cancer awareness, risk factors, early detection, and screening guidance.
+STRICT RULES:
+1. Never provide a medical diagnosis under any circumstances
+2. Always clarify your responses are for educational and awareness purposes only
+3. Always encourage consulting a qualified healthcare professional
+4. For any red-flag symptoms (unexplained weight loss, persistent bleeding, new lumps, non-healing sores, coughing blood, changes in bowel habits lasting more than 3 weeks) — URGENTLY recommend immediate medical evaluation
+5. Keep responses clear, concise, and accessible (2-5 sentences maximum unless a list is needed)
+6. Use simple language appropriate for all literacy levels
+7. Be warm, empathetic, and supportive
+8. End every substantive response with: "Please consult a healthcare provider for personalised medical advice."`;
 
-CRITICAL RULES — follow these without exception:
-1. You NEVER diagnose cancer or any medical condition.
-2. Always state your responses are for educational and screening-support purposes only.
-3. Strongly encourage users to consult a qualified healthcare professional.
-4. Be empathetic, calm, and supportive — many users may be anxious or in low-resource settings.
-5. Keep responses concise: 2-4 sentences for voice; a short paragraph for text.
-6. For symptoms: explain general clinical associations but ALWAYS recommend seeing a doctor.
-7. Focus on: cancer risk factors, screening methods, healthy lifestyle, when to seek care.
-8. RED-FLAG symptoms (coughing blood, rectal bleeding, unexplained weight loss, new lumps, non-healing sores) — urgently recommend immediate medical evaluation.
-9. Use simple, jargon-free language accessible to all literacy levels.
-10. End every response with a brief professional reminder such as: "Please consult a healthcare provider for a proper evaluation." or "Early detection saves lives — don't delay seeking care."`
-
-/** Convert flat [{role,content}] -> Gemini contents format */
-function toGeminiContents (messages) {
-  return messages.map(m => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }]
-  }))
-}
-
-// POST /ai-chat/chat
-router.post('/chat', authenticate, async (req, res) => {
+router.post("/chat", authenticate, async (req, res) => {
   try {
-    const { messages } = req.body
-    if (!Array.isArray(messages) || messages.length === 0) {
-      return res.status(400).json({ error: 'messages array is required' })
+    if (!GEMINI_KEY) {
+      return res.status(503).json({ error: "AI service not configured. Please set GEMINI_API_KEY." });
     }
 
-    if (!GEMINI_API_KEY) {
-      return res.json({
-        text: "I'm OncoSense AI. The AI service is not yet configured on this server. Please add your GEMINI_API_KEY to the backend environment. For any health concerns, please consult a qualified healthcare provider."
-      })
+    const { messages } = req.body;
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: "Messages array is required" });
     }
 
-    // Keep last 14 messages (7 turns); Gemini must start with user role
-    let contents = toGeminiContents(messages.slice(-14))
-    if (contents.length > 0 && contents[0].role === 'model') contents = contents.slice(1)
+    // Convert to Gemini format — filter out system messages, ensure valid alternation
+    let contents = messages
+      .filter(m => m.role !== "system" && m.content && m.content.trim())
+      .map(m => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content.trim() }]
+      }));
+
+    // Gemini requires conversation to start with "user"
+    while (contents.length > 0 && contents[0].role === "model") {
+      contents = contents.slice(1);
+    }
+
+    // Ensure alternating roles (Gemini requirement)
+    const cleaned = [];
+    let lastRole = null;
+    for (const msg of contents) {
+      if (msg.role !== lastRole) {
+        cleaned.push(msg);
+        lastRole = msg.role;
+      } else {
+        // Merge consecutive same-role messages
+        if (cleaned.length > 0) {
+          cleaned[cleaned.length - 1].parts[0].text += "\n" + msg.parts[0].text;
+        }
+      }
+    }
+
+    if (cleaned.length === 0) {
+      return res.status(400).json({ error: "No valid messages to process" });
+    }
 
     const payload = {
-      systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-      contents,
-      generationConfig: { maxOutputTokens: 800, temperature: 0.7, topP: 0.9 },
+      systemInstruction: {
+        parts: [{ text: SYSTEM_PROMPT }]
+      },
+      contents: cleaned.slice(-20), // Last 20 messages max
+      generationConfig: {
+        maxOutputTokens: 800,
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40
+      },
       safetySettings: [
-        { category: 'HARM_CATEGORY_HARASSMENT',        threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-        { category: 'HARM_CATEGORY_HATE_SPEECH',       threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
-        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' }
+        { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" }
       ]
-    }
+    };
 
-    const url = `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`
-    const response = await axios.post(url, payload, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 30000
-    })
+    const response = await axios.post(
+      GEMINI_URL + "?key=" + GEMINI_KEY,
+      payload,
+      {
+        headers: { "Content-Type": "application/json" },
+        timeout: 30000
+      }
+    );
 
-    const candidate = response.data?.candidates?.[0]
-    const text = candidate?.content?.parts?.map(p => p.text).join('') || ''
+    const candidate = response.data?.candidates?.[0];
+    const text = candidate?.content?.parts?.map(p => p.text).join("") || "";
 
     if (!text) {
-      logger.warn(`Gemini empty response. finishReason: ${candidate?.finishReason}`)
-      return res.json({
-        text: "I wasn't able to generate a response right now. Please try again. For urgent health concerns, please visit a healthcare facility immediately.",
-        finishReason: candidate?.finishReason
-      })
+      logger.warn("Gemini returned empty response:", JSON.stringify(response.data));
+      return res.status(500).json({ error: "AI returned empty response. Please try again." });
     }
 
-    res.json({ text })
+    logger.info("AI chat: user=" + req.user.id + " tokens=" + (response.data?.usageMetadata?.totalTokenCount || "?"));
+    return res.json({ text, role: "assistant" });
 
   } catch (err) {
-    const status = err.response?.status || 500
-    const errMsg = err.response?.data?.error?.message || err.message || 'Gemini API error'
-    logger.error(`Gemini API error [${status}]: ${errMsg}`)
-    res.status(status >= 500 ? 502 : status).json({
-      error: errMsg,
-      text: "I'm having trouble connecting to the AI service. Please try again shortly. For urgent symptoms, seek medical care immediately."
-    })
+    logger.error("AI chat error:", err.message);
+    if (err.response?.status === 400) {
+      return res.status(400).json({ error: "Invalid request to AI service: " + (err.response?.data?.error?.message || err.message) });
+    }
+    if (err.response?.status === 429) {
+      return res.status(429).json({ error: "AI service rate limit reached. Please wait a moment and try again." });
+    }
+    if (err.code === "ECONNABORTED") {
+      return res.status(504).json({ error: "AI service timed out. Please try again." });
+    }
+    return res.status(500).json({ error: "AI service error: " + err.message });
   }
-})
+});
 
-// GET /ai-chat/status
-router.get('/status', authenticate, (req, res) => {
-  res.json({
-    available: !!GEMINI_API_KEY,
-    model: GEMINI_MODEL,
-    provider: 'Google Gemini',
-    reason: GEMINI_API_KEY ? null : 'GEMINI_API_KEY not configured'
-  })
-})
-
-module.exports = router
+module.exports = router;
