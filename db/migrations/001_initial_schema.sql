@@ -1,4 +1,4 @@
--- OncoSense Schema — gen_random_uuid() only, no extensions needed
+-- OncoSense Schema — PostgreSQL 13+ only, gen_random_uuid() built-in
 
 DO $$ BEGIN CREATE TYPE user_role AS ENUM ('patient','health_worker','clinician','admin'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE TYPE risk_level AS ENUM ('low','medium','high','critical'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -11,8 +11,7 @@ DO $$ BEGIN CREATE TYPE notification_type AS ENUM ('sms','email','in_app','whats
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   email VARCHAR(255) UNIQUE, phone VARCHAR(20) UNIQUE,
-  password_hash VARCHAR(255) NOT NULL,
-  role user_role NOT NULL DEFAULT 'patient',
+  password_hash VARCHAR(255) NOT NULL, role user_role NOT NULL DEFAULT 'patient',
   first_name VARCHAR(100) NOT NULL, last_name VARCHAR(100) NOT NULL,
   preferred_language VARCHAR(10) DEFAULT 'en',
   is_active BOOLEAN DEFAULT true, is_verified BOOLEAN DEFAULT false,
@@ -20,7 +19,6 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone);
-CREATE INDEX IF NOT EXISTS idx_users_role  ON users(role);
 
 CREATE TABLE IF NOT EXISTS health_profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -34,7 +32,8 @@ CREATE TABLE IF NOT EXISTS health_profiles (
   breastfeeding_history BOOLEAN, age_first_menstruation INTEGER, menopause_status VARCHAR(20),
   hpv_vaccinated BOOLEAN, oral_contraceptive_use BOOLEAN,
   family_cancer_history BOOLEAN DEFAULT false, family_cancer_types TEXT[], family_cancer_relations TEXT[],
-  profile_completed BOOLEAN DEFAULT false, last_updated TIMESTAMP DEFAULT NOW(), created_at TIMESTAMP DEFAULT NOW()
+  profile_completed BOOLEAN DEFAULT false,
+  last_updated TIMESTAMP DEFAULT NOW(), created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_health_profiles_user ON health_profiles(user_id);
 
@@ -57,11 +56,13 @@ CREATE INDEX IF NOT EXISTS idx_symptoms_user ON symptoms(user_id);
 
 CREATE TABLE IF NOT EXISTS risk_assessments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, symptom_id UUID REFERENCES symptoms(id),
-  rule_based_score DECIMAL(4,3), ml_score DECIMAL(4,3), final_score DECIMAL(4,3) NOT NULL,
-  risk_level risk_level NOT NULL, suspected_categories JSONB DEFAULT '[]',
-  feature_importance JSONB DEFAULT '{}', confidence_score DECIMAL(4,3), model_version VARCHAR(50),
-  assessment_notes TEXT, reviewed_by UUID REFERENCES users(id), reviewed_at TIMESTAMP,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  symptom_id UUID REFERENCES symptoms(id),
+  rule_based_score DECIMAL(4,3), ml_score DECIMAL(4,3),
+  final_score DECIMAL(4,3) NOT NULL, risk_level risk_level NOT NULL,
+  suspected_categories JSONB DEFAULT '[]', feature_importance JSONB DEFAULT '{}',
+  confidence_score DECIMAL(4,3), model_version VARCHAR(50), assessment_notes TEXT,
+  reviewed_by UUID REFERENCES users(id), reviewed_at TIMESTAMP,
   created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_assessments_user       ON risk_assessments(user_id);
@@ -101,7 +102,6 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_consultation ON messages(consultation_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender       ON messages(sender_id);
-CREATE INDEX IF NOT EXISTS idx_messages_created      ON messages(created_at);
 
 CREATE TABLE IF NOT EXISTS image_screenings (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS clinics (
 CREATE INDEX IF NOT EXISTS idx_clinics_location ON clinics(country, region);
 CREATE INDEX IF NOT EXISTS idx_clinics_coords   ON clinics(latitude, longitude);
 
--- Add new columns to clinics if they don't exist (safe upgrade)
+-- Safe column additions for existing databases
 DO $$ BEGIN ALTER TABLE clinics ADD COLUMN IF NOT EXISTS insurance_accepted TEXT[]; EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TABLE clinics ADD COLUMN IF NOT EXISTS ownership VARCHAR(20) DEFAULT 'public'; EXCEPTION WHEN others THEN NULL; END $$;
 DO $$ BEGIN ALTER TABLE clinics ADD COLUMN IF NOT EXISTS email VARCHAR(255); EXCEPTION WHEN others THEN NULL; END $$;
@@ -159,7 +159,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user    ON audit_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_action  ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
 
 CREATE OR REPLACE FUNCTION update_updated_at()
