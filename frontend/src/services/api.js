@@ -6,13 +6,15 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' }
 })
 
+// Attach JWT on every request
 api.interceptors.request.use(
   (config) => {
     try {
       const stored = localStorage.getItem('oncosense-auth')
       if (stored) {
-        const { state } = JSON.parse(stored)
-        if (state?.token) config.headers.Authorization = `Bearer ${state.token}`
+        const parsed = JSON.parse(stored)
+        const token  = parsed?.state?.token
+        if (token) config.headers.Authorization = 'Bearer ' + token
       }
     } catch {}
     return config
@@ -39,7 +41,7 @@ export const assessmentService = {
   create:    (data) => api.post('/assessments', data),
   getAll:    ()     => api.get('/assessments'),
   getLatest: ()     => api.get('/assessments/latest'),
-  getById:   (id)   => api.get(`/assessments/${id}`),
+  getById:   (id)   => api.get('/assessments/' + id),
 }
 
 export const profileService = {
@@ -48,33 +50,32 @@ export const profileService = {
 }
 
 export const consultationService = {
-  create:      (data)     => api.post('/consultations', data),
-  getAll:      ()         => api.get('/consultations'),
-  getById:     (id)       => api.get(`/consultations/${id}`),
-  complete:    (id, data) => api.patch(`/consultations/${id}/complete`, data),
-  getMessages: (id)       => api.get(`/messages/${id}`),
+  create:      (data) => api.post('/consultations', data),
+  getAll:      ()     => api.get('/consultations'),
+  getById:     (id)   => api.get('/consultations/' + id),
+  complete:    (id, data) => api.patch('/consultations/' + id + '/complete', data),
+  getMessages: (id)   => api.get('/messages/' + id),
 }
 
 export const clinicService = {
-  getAll:     (params)  => api.get('/clinics', { params }),
+  getAll:     (params) => api.get('/clinics', { params }),
   getCounties:(country) => api.get('/clinics/counties', { params: { country: country || 'Kenya' } }),
 }
 
 export const recommendationService = {
   getAll:   ()   => api.get('/recommendations'),
-  complete: (id) => api.patch(`/recommendations/${id}/complete`),
+  complete: (id) => api.patch('/recommendations/' + id + '/complete'),
 }
 
-export const notificationService = {
-  getAll:   ()   => api.get('/notifications'),
-  markRead: (id) => api.patch(`/notifications/${id}/read`),
+export const imageService = {
+  analyze: (formData) => api.post('/image-screening/analyze', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }),
+  getAll: () => api.get('/image-screening/my-screenings'),
 }
 
 export const adminService = {
-  getDashboard:     ()       => api.get('/admin/dashboard'),
-  getUsers:         (params) => api.get('/admin/users', { params }),
-  getHighRiskUsers: ()       => api.get('/admin/high-risk-users'),
-  getAssessments:   (params) => api.get('/admin/assessments', { params }),
-  getCancerTypes:   ()       => api.get('/admin/analytics/cancer-types'),
-  toggleUser:       (id)     => api.patch(`/admin/users/${id}/toggle`),
+  getDashboard:   ()       => api.get('/admin/dashboard'),
+  getUsers:       (params) => api.get('/admin/users', { params }),
+  getAssessments: (params) => api.get('/admin/assessments', { params }),
 }
