@@ -63,4 +63,15 @@ export const useAuthStore = create((set, get) => ({
   },
 
   getToken: () => get().token,
+
+  loadUser: () => {
+    // Load user from localStorage on app initialization
+    const state = loadState()
+    set({
+      user: state.user,
+      token: state.token,
+      isAuthenticated: state.isAuthenticated
+    })
+  }
 }))
+
